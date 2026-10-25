@@ -33,6 +33,7 @@ namespace UnityAIBridge
     public sealed class LlmRequest
     {
         public string ProviderId;
+        public string SessionId;
         public string Model;
         public string Instructions;
         public List<LlmMessage> Messages = new List<LlmMessage>();

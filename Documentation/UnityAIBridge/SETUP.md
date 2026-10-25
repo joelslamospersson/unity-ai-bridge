@@ -37,6 +37,27 @@ Usage and cost:
 
 Errors are surfaced as readable messages: 401 (bad key), 402 (insufficient balance), 429 (rate limit), 400 (request/tool/thinking constraints), and connection failures.
 
+## OpenCode Go
+
+OpenCode Go is an OpenCode subscription that provides an OpenAI-compatible API for coding models. It is not OpenAI or DeepSeek API billing; usage and limits follow your OpenCode plan.
+
+1. Create a key at <https://opencode.ai/auth>.
+2. Provider: **OpenCode Go**.
+3. Paste the key in the account bar (or Settings) and press **Save & test**.
+4. Select a model. Models are discovered from the base URL's `/models` endpoint.
+
+Defaults and endpoints:
+
+- Base URL: `https://opencode.ai/zen/go/v1`
+- Alternate endpoint: `https://opencode.ai/inference/go/openai/v1` (used if the default is unavailable; you can set it manually)
+- Chat endpoint: `/chat/completions`
+- The bridge sends the required `x-opencode-session` header automatically for each conversation.
+- Common models: `deepseek-v4.1-flash`, `deepseek-v4-pro`, `kimi-k3`, `glm-5.3`, `mimo-v2.6-flash`, and others listed by `/models`.
+
+If you previously pasted an OpenCode Go key into the **DeepSeek** provider, it will be rejected by `api.deepseek.com`. Switch to **OpenCode Go** and use **Reuse the key saved for DeepSeek** (or paste it again). The DeepSeek provider is only for keys created at `platform.deepseek.com`.
+
+Some OpenCode Go models use a Responses endpoint (for example GPT/Grok entries) and are not available through this chat-completions provider. Web search/model catalogs can change; the model dropdown reflects the live `/models` response.
+
 ## ChatGPT (Sign in with ChatGPT)
 
 Unity AI Bridge uses OpenAI's official **open-source Sign in with ChatGPT** flow. It performs OAuth 2.0 Authorization Code + PKCE with a local loopback callback and validates the OIDC ID token against OpenAI's JWKS. It does not use browser cookies, scraping, or unofficial endpoints.
@@ -126,6 +147,8 @@ Provider: **Ollama**.
 | ChatGPT 401 | Token expired and refresh failed; sign in again |
 | ChatGPT 429 / `subscription_sharing_usage_limit_exceeded` | Shared plan limit reached; check ChatGPT Settings → Usage |
 | ChatGPT 403 / `subscription_sharing_user_not_eligible` | Account/workspace/region not eligible for plan usage |
+| OpenCode Go 401 | Use a key from opencode.ai/auth; a DeepSeek key will not work. Switch provider and reuse the saved key |
+| OpenCode Go 404/model error | Verify the base URL and model; some OpenCode Go models use a Responses endpoint and are not supported here |
 | “No model” | Refresh models, sign in, or check the API key |
 | MCP port in use | Change the MCP port in the MCP tab |
 | No Unity recompile | Focus the Editor or press Refresh in Explorer |

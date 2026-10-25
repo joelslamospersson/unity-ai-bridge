@@ -31,6 +31,7 @@ namespace UnityAIBridge
     public class ChatSessionData
     {
         public string Provider;
+        public string SessionId;
         public string Model;
         public List<ChatMessage> Display = new List<ChatMessage>();
         public List<LlmMessage> Transcript = new List<LlmMessage>();
@@ -104,6 +105,8 @@ namespace UnityAIBridge
             LoadCachedModels(_activeProvider);
             if (_activeProvider == BridgeSettings.ProviderDeepSeek && _models.Count == 0 && string.IsNullOrEmpty(BridgeSettings.Secrets.DeepSeekApiKey))
                 _models = DeepSeekProvider.VerifiedModels();
+            if (_activeProvider == BridgeSettings.ProviderOpenCode && _models.Count == 0 && string.IsNullOrEmpty(BridgeSettings.Secrets.OpenCodeApiKey))
+                _models = OpenCodeGoProvider.VerifiedModels();
             if (string.IsNullOrEmpty(CurrentSession.Model)) CurrentSession.Model = DefaultModel(_activeProvider);
             UpdateConnectionFromProvider();
             if (_models.Count == 0 && (ProviderFactory.IsConfigured(_activeProvider, out _) || _activeProvider == BridgeSettings.ProviderChatGpt))
@@ -149,6 +152,7 @@ namespace UnityAIBridge
             if (session.Display == null) session.Display = new List<ChatMessage>();
             if (session.Transcript == null) session.Transcript = new List<LlmMessage>();
             session.Provider = provider;
+            if (string.IsNullOrEmpty(session.SessionId)) session.SessionId = Guid.NewGuid().ToString("N");
             if (string.IsNullOrEmpty(session.Model)) session.Model = DefaultModel(provider);
             Sessions[provider] = session;
             return session;
@@ -182,6 +186,7 @@ namespace UnityAIBridge
             switch (provider)
             {
                 case BridgeSettings.ProviderDeepSeek: return string.IsNullOrEmpty(settings.DeepSeekModel) ? "deepseek-flash" : settings.DeepSeekModel;
+                case BridgeSettings.ProviderOpenCode: return string.IsNullOrEmpty(settings.OpenCodeModel) ? "deepseek-v4.1-flash" : settings.OpenCodeModel;
                 case BridgeSettings.ProviderChatGpt: return settings.ChatGptModel ?? string.Empty;
                 case BridgeSettings.ProviderOpenAi: return settings.OpenAiModel;
                 case BridgeSettings.ProviderOllama: return settings.OllamaModel;
@@ -195,6 +200,7 @@ namespace UnityAIBridge
             switch (provider)
             {
                 case BridgeSettings.ProviderDeepSeek: settings.DeepSeekModel = model; break;
+                case BridgeSettings.ProviderOpenCode: settings.OpenCodeModel = model; break;
                 case BridgeSettings.ProviderChatGpt: settings.ChatGptModel = model; break;
                 case BridgeSettings.ProviderOpenAi: settings.OpenAiModel = model; break;
                 case BridgeSettings.ProviderOllama: settings.OllamaModel = model; break;
@@ -268,6 +274,7 @@ namespace UnityAIBridge
                     : ProviderConnectionState.NotConfigured;
                 ConnectionMessage = reason;
                 if (providerId == BridgeSettings.ProviderDeepSeek) _models = DeepSeekProvider.VerifiedModels();
+                if (providerId == BridgeSettings.ProviderOpenCode) _models = OpenCodeGoProvider.VerifiedModels();
                 if (providerId == BridgeSettings.ProviderChatGpt) _models = new List<ModelInfo>();
                 Raise();
                 return;
@@ -295,6 +302,7 @@ namespace UnityAIBridge
                             PersistModel(providerId, CurrentSession.Model);
                         }
                         SaveSession(providerId);
+                        BridgeLog.Info("chat", "Loaded " + _models.Count + " model(s) for " + providerId + ".");
                         Raise();
                     });
                 }
@@ -312,6 +320,15 @@ namespace UnityAIBridge
                             if (!_models.Exists(m => m.Id == CurrentSession.Model))
                             {
                                 CurrentSession.Model = "deepseek-flash";
+                                PersistModel(providerId, CurrentSession.Model);
+                            }
+                        }
+                        if (providerId == BridgeSettings.ProviderOpenCode && _models.Count == 0)
+                        {
+                            _models = OpenCodeGoProvider.VerifiedModels();
+                            if (!_models.Exists(m => m.Id == CurrentSession.Model))
+                            {
+                                CurrentSession.Model = "deepseek-v4.1-flash";
                                 PersistModel(providerId, CurrentSession.Model);
                             }
                         }
@@ -444,6 +461,7 @@ namespace UnityAIBridge
             var request = new LlmRequest
             {
                 ProviderId = providerId,
+                SessionId = session.SessionId,
                 Model = model,
                 Instructions = instructions,
                 Messages = session.Transcript,
@@ -845,6 +863,7 @@ namespace UnityAIBridge
             switch (provider)
             {
                 case BridgeSettings.ProviderDeepSeek: settings.DeepSeekModelsJson = json; break;
+                case BridgeSettings.ProviderOpenCode: settings.OpenCodeModelsJson = json; break;
                 case BridgeSettings.ProviderChatGpt: settings.ChatGptModelsJson = json; break;
                 case BridgeSettings.ProviderOpenAi: settings.OpenAiModelsJson = json; break;
                 case BridgeSettings.ProviderOllama: settings.OllamaModelsJson = json; break;
@@ -859,6 +878,7 @@ namespace UnityAIBridge
             switch (provider)
             {
                 case BridgeSettings.ProviderDeepSeek: json = settings.DeepSeekModelsJson; break;
+                case BridgeSettings.ProviderOpenCode: json = settings.OpenCodeModelsJson; break;
                 case BridgeSettings.ProviderChatGpt: json = settings.ChatGptModelsJson; break;
                 case BridgeSettings.ProviderOpenAi: json = settings.OpenAiModelsJson; break;
                 case BridgeSettings.ProviderOllama: json = settings.OllamaModelsJson; break;

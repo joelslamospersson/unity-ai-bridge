@@ -46,13 +46,13 @@ The suite pauses automatic asset refresh, uses `Assets/__UAIBTests__/`, starts l
 Unity 6000.6.7f1, Linux Editor, batch mode against a copy:
 
 ```
-31 passed, 0 failed   (~2 s of test time)
+32 passed, 0 failed   (~2 s of test time)
 ```
 
 Live Editor result after the rebranding and migration:
 
 ```
-31 passed, 0 failed   (2.46 s)
+32 passed, 0 failed   (3.01 s)
 ```
 
 | # | Test | Verifies |
@@ -86,8 +86,9 @@ Live Editor result after the rebranding and migration:
 | 27 | `openai_responses_stream` | Responses API SSE, function call assembly, usage, raw items |
 | 28 | `chatgpt_oauth_responses_request` | ChatGPT route uses `additional_tools`, `store:false`, `stream:true`, no unsupported fields, bearer OAuth token |
 | 29 | `chatgpt_token_refresh` | Form-encoded refresh grant, rotating tokens, secret persistence |
-| 30 | `agent_tool_loop_stages_change` | Real tool loop: model → tool → result → final answer; write is staged, not applied |
-| 31 | `agent_tool_loop_apply_after_approval` | Human approval + apply writes the file correctly |
+| 30 | `opencode_stream_and_tools` | OpenCode Go model discovery, chat-completions streaming, reasoning, tools and usage |
+| 31 | `agent_tool_loop_stages_change` | Real tool loop: model → tool → result → final answer; write is staged, not applied |
+| 32 | `agent_tool_loop_apply_after_approval` | Human approval + apply writes the file correctly |
 
 ## Migration checks
 

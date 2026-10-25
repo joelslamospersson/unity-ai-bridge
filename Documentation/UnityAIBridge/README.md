@@ -2,7 +2,7 @@
 
 **Open-source AI development assistant for the Unity Editor.**
 
-Unity AI Bridge is an independent, MIT-licensed Editor extension that connects AI assistants to your Unity development workflow. Chat with ChatGPT, DeepSeek, OpenAI API, or Ollama, inspect project context, and manage scripts, scenes, prefabs, and assets through permission-controlled tools.
+Unity AI Bridge is an independent, MIT-licensed Editor extension that connects AI assistants to your Unity development workflow. Chat with ChatGPT, DeepSeek, OpenCode Go, OpenAI API, or Ollama, inspect project context, and manage scripts, scenes, prefabs, and assets through permission-controlled tools.
 
 It is not affiliated with, endorsed by, or sponsored by Unity Technologies, OpenAI, DeepSeek, or Ollama.
 
@@ -11,6 +11,7 @@ It is not affiliated with, endorsed by, or sponsored by Unity Technologies, Open
 - **Live streaming chat** inside a native Unity Editor window
 - **ChatGPT** via Sign in with ChatGPT (OAuth + PKCE, ChatGPT plan usage)
 - **DeepSeek** API with model discovery, reasoning, streaming tool calls, usage and estimated cost
+- **OpenCode Go** with OpenAI-compatible chat completions, model discovery and tool calling
 - **OpenAI API** with streaming Responses API and function tools
 - **Ollama** local inference with streaming and tool calling where supported
 - **Permission-controlled project tools** for scripts, scenes, GameObjects, prefabs, materials, sprites, ScriptableObjects, console diagnostics and asset refresh
@@ -82,6 +83,7 @@ See [SECURITY.md](SECURITY.md).
 | --- | --- | --- |
 | ChatGPT | Sign in with ChatGPT (OAuth + PKCE) | ChatGPT plan usage, subject to OpenAI eligibility and shared usage limits |
 | DeepSeek | API key | Per-token DeepSeek API billing |
+| OpenCode Go | API key | OpenCode Go subscription/usage |
 | OpenAI API | Platform API key | Per-token OpenAI API billing |
 | Ollama | Local URL | Local inference |
 

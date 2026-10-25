@@ -10,6 +10,7 @@ namespace UnityAIBridge
             {
                 case BridgeSettings.ProviderChatGpt: return new OpenAiResponsesProvider(true);
                 case BridgeSettings.ProviderDeepSeek: return new DeepSeekProvider();
+                case BridgeSettings.ProviderOpenCode: return new OpenCodeGoProvider();
                 case BridgeSettings.ProviderOpenAi: return new OpenAiResponsesProvider(false);
                 case BridgeSettings.ProviderOllama: return new OllamaLiveProvider();
                 default: return null;
@@ -22,6 +23,7 @@ namespace UnityAIBridge
             {
                 case BridgeSettings.ProviderChatGpt: return "ChatGPT";
                 case BridgeSettings.ProviderDeepSeek: return "DeepSeek";
+                case BridgeSettings.ProviderOpenCode: return "OpenCode Go";
                 case BridgeSettings.ProviderOpenAi: return "OpenAI API";
                 case BridgeSettings.ProviderOllama: return "Ollama (local)";
                 default: return "Not configured";

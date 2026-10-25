@@ -475,7 +475,7 @@ namespace UnityAIBridge
             try
             {
                 bool ok = true;
-                foreach (var id in new[] { BridgeSettings.ProviderChatGpt, BridgeSettings.ProviderDeepSeek, BridgeSettings.ProviderOpenAi, BridgeSettings.ProviderOllama })
+                foreach (var id in new[] { BridgeSettings.ProviderChatGpt, BridgeSettings.ProviderDeepSeek, BridgeSettings.ProviderOpenCode, BridgeSettings.ProviderOpenAi, BridgeSettings.ProviderOllama })
                 {
                     var provider = ProviderFactory.Create(id);
                     if (provider == null || provider.Id != id) ok = false;
@@ -565,7 +565,11 @@ namespace UnityAIBridge
             var refreshTest = RunChatGptRefreshTest();
             while (refreshTest.MoveNext()) yield return refreshTest.Current;
 
-            // 27. Tool loop stages a change, requires approval, then applies
+            // 27. OpenCode Go streaming (models resolution, chat completions, tools, usage)
+            var openCodeTest = RunOpenCodeStreamTest();
+            while (openCodeTest.MoveNext()) yield return openCodeTest.Current;
+
+            // 28. Tool loop stages a change, requires approval, then applies
             var loopTest = RunAgentToolLoopTest();
             while (loopTest.MoveNext()) yield return loopTest.Current;
 
@@ -1013,6 +1017,101 @@ namespace UnityAIBridge
             yield break;
         }
 
+        static IEnumerator RunOpenCodeStreamTest()
+        {
+            var settings = BridgeSettings.Current;
+            string savedBase = settings.OpenCodeBaseUrl;
+            string savedKey = BridgeSettings.Secrets.OpenCodeApiKey;
+
+            var server = new LocalTestServer((request, body) =>
+            {
+                if (request.HttpMethod == "GET")
+                {
+                    return new MockReply
+                    {
+                        ContentType = "application/json",
+                        Body = JsonValue.Obj("data", JsonValue.Arr(JsonValue.Obj(
+                            "id", "deepseek-v4.1-flash",
+                            "name", "DeepSeek V4.1 Flash",
+                            "context_window", 1048576,
+                            "max_output_tokens", 393216))).ToJson(false)
+                    };
+                }
+
+                var sb = new StringBuilder();
+                sb.Append(Sse(JsonValue.Obj("choices", JsonValue.Arr(JsonValue.Obj("index", 0, "delta", JsonValue.Obj("reasoning_content", "Think. "))))));
+                sb.Append(Sse(JsonValue.Obj("choices", JsonValue.Arr(JsonValue.Obj("index", 0, "delta", JsonValue.Obj("content", "Hello "))))));
+                sb.Append(Sse(JsonValue.Obj("choices", JsonValue.Arr(JsonValue.Obj("index", 0, "delta", JsonValue.Obj("tool_calls", JsonValue.Arr(
+                    JsonValue.Obj("index", 0, "id", "call_oc", "type", "function", "function", JsonValue.Obj("name", "project_summary", "arguments", "{}")))))))));
+                sb.Append(Sse(JsonValue.Obj(
+                    "choices", JsonValue.Arr(JsonValue.Obj("index", 0, "delta", JsonValue.NewObject(), "finish_reason", "tool_calls")),
+                    "usage", JsonValue.Obj(
+                        "prompt_tokens", 50,
+                        "completion_tokens", 10,
+                        "total_tokens", 60,
+                        "completion_tokens_details", JsonValue.Obj("reasoning_tokens", 3)))));
+                sb.Append("data: [DONE]\n\n");
+                return new MockReply { ContentType = "text/event-stream", Body = sb.ToString() };
+            });
+
+            settings.OpenCodeBaseUrl = server.BaseUrl;
+            BridgeSettings.Secrets.OpenCodeApiKey = "opencode-test-key";
+            OpenCodeGoProvider.ResetResolvedBase();
+
+            var request = new LlmRequest
+            {
+                ProviderId = BridgeSettings.ProviderOpenCode,
+                SessionId = "oc-session-test",
+                Model = "deepseek-v4.1-flash",
+                Instructions = "system",
+                Messages = new List<LlmMessage> { new LlmMessage { Role = "user", Content = "hello" } },
+                Tools = new List<ToolSpec> { new ToolSpec { Name = "project_summary", Description = "summary", Schema = JsonValue.Obj("type", "object", "properties", JsonValue.NewObject()) } },
+                MaxOutputTokens = 100,
+                Temperature = 0.2
+            };
+
+            ProviderTurn turn = null;
+            Exception failure = null;
+            var task = Task.Run(async () =>
+            {
+                try { turn = await new OpenCodeGoProvider().StreamTurnAsync(request, e => { }, CancellationToken.None); }
+                catch (Exception e) { failure = e; }
+            });
+
+            float start = Time.realtimeSinceStartup;
+            while (!task.IsCompleted && Time.realtimeSinceStartup - start < 45f) yield return null;
+            string path = server.LastPath;
+            string bodySent = server.LastBody;
+            string sessionHeader = server.LastSession;
+            server.Stop();
+
+            try
+            {
+                if (!task.IsCompleted) failure = new BridgeException("OpenCode Go mock request timed out.");
+                else if (task.IsFaulted) failure = task.Exception != null ? task.Exception.GetBaseException() : new BridgeException("task failed");
+                bool ok = failure == null && turn != null &&
+                          turn.Text == "Hello " &&
+                          turn.Reasoning == "Think. " &&
+                          turn.ToolCalls.Count == 1 &&
+                          turn.ToolCalls[0].Name == "project_summary" &&
+                          turn.ToolCalls[0].Arguments == "{}" &&
+                          turn.Usage.PromptTokens == 50 &&
+                          turn.Usage.CompletionTokens == 10 &&
+                          path != null && path.EndsWith("/chat/completions", StringComparison.Ordinal) &&
+                          bodySent != null && bodySent.IndexOf("deepseek-v4.1-flash", StringComparison.Ordinal) >= 0 &&
+                          sessionHeader == "oc-session-test";
+                Check("opencode_stream_and_tools", ok,
+                    failure != null ? failure.Message : "text=" + (turn != null ? turn.Text : "") + " path=" + path + " usage=" + (turn != null ? turn.Usage.Summary() : ""));
+            }
+            finally
+            {
+                settings.OpenCodeBaseUrl = savedBase;
+                BridgeSettings.Secrets.OpenCodeApiKey = savedKey;
+                OpenCodeGoProvider.ResetResolvedBase();
+            }
+            yield break;
+        }
+
         static IEnumerator RunAgentToolLoopTest()
         {
             string target = TestFolder + "/agent_loop.txt";
@@ -1132,6 +1231,7 @@ namespace UnityAIBridge
             public string BaseUrl { get; private set; }
             public string LastBody { get; private set; }
             public string LastAuthorization { get; private set; }
+            public string LastSession { get; private set; }
             public string LastPath { get; private set; }
 
             public LocalTestServer(Func<HttpListenerRequest, string, MockReply> handler)
@@ -1177,6 +1277,7 @@ namespace UnityAIBridge
                         body = reader.ReadToEnd();
                     LastBody = body;
                     LastAuthorization = context.Request.Headers["Authorization"];
+                    LastSession = context.Request.Headers["x-opencode-session"];
                     LastPath = context.Request.Url != null ? context.Request.Url.AbsolutePath : string.Empty;
                     var reply = _handler(context.Request, body) ?? new MockReply { Body = "{}" };
                     byte[] bytes = Encoding.UTF8.GetBytes(reply.Body ?? string.Empty);

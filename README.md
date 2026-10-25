@@ -2,7 +2,7 @@
 
 **Open-source AI development assistant for the Unity Editor.**
 
-An independent, MIT-licensed Unity Editor extension that connects AI assistants to your development workflow. Chat with ChatGPT, DeepSeek, OpenAI API, or Ollama, inspect project context, and manage scripts, scenes, prefabs, and assets through permission-controlled tools.
+An independent, MIT-licensed Unity Editor extension that connects AI assistants to your development workflow. Chat with ChatGPT, DeepSeek, OpenCode Go, OpenAI API, or Ollama, inspect project context, and manage scripts, scenes, prefabs, and assets through permission-controlled tools.
 
 > Unity AI Bridge is independently developed. It is not affiliated with, endorsed by, or sponsored by Unity Technologies, OpenAI, DeepSeek, or Ollama.
 
@@ -11,6 +11,7 @@ An independent, MIT-licensed Unity Editor extension that connects AI assistants 
 - Native streaming chat window: **Tools → Unity AI Bridge**
 - **ChatGPT** via Sign in with ChatGPT (OAuth + PKCE, ChatGPT plan usage)
 - **DeepSeek** API with model discovery, reasoning, streaming tool calls, usage and estimated cost
+- **OpenCode Go** with OpenAI-compatible chat completions, model discovery and tool calling
 - **OpenAI API** with streaming Responses API and function tools
 - **Ollama** local inference with streaming and tool calling where supported
 - 22 permission-controlled Unity tools for project inspection, scripts, scenes, GameObjects, prefabs, materials, sprites, ScriptableObjects, console diagnostics and asset refresh
@@ -79,6 +80,7 @@ See [Security](Documentation/UnityAIBridge/SECURITY.md).
 | --- | --- | --- |
 | ChatGPT | Sign in with ChatGPT (OAuth + PKCE) | ChatGPT plan usage, subject to OpenAI eligibility and shared limits |
 | DeepSeek | API key | Per-token DeepSeek API billing |
+| OpenCode Go | API key | OpenCode Go subscription/usage |
 | OpenAI API | Platform API key | Per-token OpenAI API billing |
 | Ollama | Local URL | Local inference |
 
@@ -104,7 +106,7 @@ See [Setup](Documentation/UnityAIBridge/SETUP.md) and [Testing](Documentation/Un
 
 Run **Tools → Unity AI Bridge → Run Self Tests**. The suite covers file and asset operations, sandbox escapes, permissions, Undo, MCP, provider request/stream parsing, OAuth PKCE/JWT/refresh and the tool loop.
 
-The current suite has 31 tests. See [Testing](Documentation/UnityAIBridge/TESTING.md) for details and current results.
+The current suite has 32 tests. See [Testing](Documentation/UnityAIBridge/TESTING.md) for details and current results.
 
 ## Known limitations
 

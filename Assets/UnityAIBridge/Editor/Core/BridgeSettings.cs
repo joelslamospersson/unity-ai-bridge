@@ -12,6 +12,7 @@ namespace UnityAIBridge
         public const string ProviderManual = "manual"; // legacy only
         public const string ProviderChatGpt = "chatgpt";
         public const string ProviderDeepSeek = "deepseek";
+        public const string ProviderOpenCode = "opencode";
         public const string ProviderOpenAi = "openai";
         public const string ProviderOllama = "ollama";
 
@@ -32,6 +33,9 @@ namespace UnityAIBridge
 
         public string DeepSeekBaseUrl = "https://api.deepseek.com";
         public string DeepSeekModel = "deepseek-flash";
+
+        public string OpenCodeBaseUrl = "https://opencode.ai/zen/go/v1";
+        public string OpenCodeModel = "deepseek-v4.1-flash";
         public bool DeepSeekThinking = true;
         public string DeepSeekReasoningEffort = "high";
         public int DeepSeekMaxTokens = 16384;
@@ -45,6 +49,7 @@ namespace UnityAIBridge
         public bool ShowReasoning = true;
 
         public string DeepSeekModelsJson = "";
+        public string OpenCodeModelsJson = "";
         public string OpenAiModelsJson = "";
         public string ChatGptModelsJson = "";
         public string OllamaModelsJson = "";
@@ -152,11 +157,14 @@ namespace UnityAIBridge
         public void Normalize()
         {
             if (string.IsNullOrEmpty(Provider) || Provider == ProviderManual) Provider = ProviderDeepSeek;
-            if (Provider != ProviderChatGpt && Provider != ProviderDeepSeek && Provider != ProviderOpenAi && Provider != ProviderOllama)
+            if (Provider != ProviderChatGpt && Provider != ProviderDeepSeek && Provider != ProviderOpenCode &&
+                Provider != ProviderOpenAi && Provider != ProviderOllama)
                 Provider = ProviderDeepSeek;
             if (string.IsNullOrEmpty(DeepSeekBaseUrl)) DeepSeekBaseUrl = "https://api.deepseek.com";
             if (string.IsNullOrEmpty(DeepSeekModel)) DeepSeekModel = "deepseek-flash";
             if (string.IsNullOrEmpty(DeepSeekReasoningEffort)) DeepSeekReasoningEffort = "high";
+            if (string.IsNullOrEmpty(OpenCodeBaseUrl)) OpenCodeBaseUrl = "https://opencode.ai/zen/go/v1";
+            if (string.IsNullOrEmpty(OpenCodeModel)) OpenCodeModel = "deepseek-v4.1-flash";
             if (DeepSeekMaxTokens < 256) DeepSeekMaxTokens = 16384;
             if (string.IsNullOrEmpty(OpenAiBaseUrl)) OpenAiBaseUrl = "https://api.openai.com/v1";
             if (string.IsNullOrEmpty(OpenAiModel)) OpenAiModel = "gpt-5.2";
@@ -232,6 +240,7 @@ namespace UnityAIBridge
     {
         public string OpenAiApiKey = "";
         public string DeepSeekApiKey = "";
+        public string OpenCodeApiKey = "";
         public string McpToken = "";
         public string OllamaApiKey = "";
 

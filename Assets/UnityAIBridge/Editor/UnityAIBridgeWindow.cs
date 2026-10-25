@@ -14,8 +14,8 @@ namespace UnityAIBridge
     public sealed class UnityAIBridgeWindow : EditorWindow
     {
         static readonly string[] TabNames = { "Chat", "Explorer", "Scene", "Assets", "Changes", "MCP", "Settings", "Logs" };
-        static readonly string[] ProviderIds = { BridgeSettings.ProviderChatGpt, BridgeSettings.ProviderDeepSeek, BridgeSettings.ProviderOpenAi, BridgeSettings.ProviderOllama };
-        static readonly string[] ProviderLabels = { "ChatGPT", "DeepSeek", "OpenAI API", "Ollama (local)" };
+        static readonly string[] ProviderIds = { BridgeSettings.ProviderChatGpt, BridgeSettings.ProviderDeepSeek, BridgeSettings.ProviderOpenCode, BridgeSettings.ProviderOpenAi, BridgeSettings.ProviderOllama };
+        static readonly string[] ProviderLabels = { "ChatGPT", "DeepSeek", "OpenCode Go", "OpenAI API", "Ollama (local)" };
         static readonly string[] LevelLabels = { "Read Only", "Ask Before Editing", "Project Write Access" };
         static readonly string[] PrimitiveLabels = { "Empty", "Cube", "Sphere", "Capsule", "Cylinder", "Plane", "Quad" };
         static readonly string[] PrimitiveValues = { "empty", "cube", "sphere", "capsule", "cylinder", "plane", "quad" };
@@ -79,6 +79,7 @@ namespace UnityAIBridge
         bool _mcpTesting;
         string _mcpTestResult;
         string _deepSeekKeyDraft = string.Empty;
+        string _openCodeKeyDraft = string.Empty;
         string _apiKeyDraft = string.Empty;
         string _chatGptNotice = string.Empty;
         string _feedback = string.Empty;
@@ -379,6 +380,7 @@ namespace UnityAIBridge
             {
                 if (provider == BridgeSettings.ProviderChatGpt) DrawChatGptAccount();
                 else if (provider == BridgeSettings.ProviderDeepSeek) DrawDeepSeekAccount();
+                else if (provider == BridgeSettings.ProviderOpenCode) DrawOpenCodeAccount();
                 else if (provider == BridgeSettings.ProviderOpenAi) DrawOpenAiAccount();
                 else if (provider == BridgeSettings.ProviderOllama) DrawOllamaAccount();
 
@@ -475,6 +477,91 @@ namespace UnityAIBridge
                 }
                 if (!string.IsNullOrEmpty(ChatService.LastTestResult)) GUILayout.Label(ChatService.LastTestResult, EditorStyles.miniLabel);
             }
+        }
+
+        void DrawOpenCodeAccount()
+        {
+            if (!string.IsNullOrEmpty(BridgeSettings.Secrets.OpenCodeApiKey))
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Label("OpenCode Go API key configured", EditorStyles.boldLabel);
+                    GUILayout.Label("· " + ChatService.ConnectionState, EditorStyles.miniLabel);
+                    GUILayout.FlexibleSpace();
+                    using (new EditorGUI.DisabledScope(ChatService.IsTesting))
+                    {
+                        if (GUILayout.Button(ChatService.IsTesting ? "Testing..." : "Test connection", EditorStyles.miniButton, GUILayout.Width(112f)))
+                            ChatService.TestConnection();
+                    }
+                    if (GUILayout.Button("Settings", EditorStyles.miniButton, GUILayout.Width(68f))) _tab = 6;
+                    if (GUILayout.Button("Clear key", EditorStyles.miniButton, GUILayout.Width(70f)))
+                    {
+                        BridgeSettings.Secrets.OpenCodeApiKey = string.Empty;
+                        BridgeSettings.SaveSecrets();
+                        ChatService.RefreshModels(true);
+                    }
+                }
+            }
+            else
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    _openCodeKeyDraft = EditorGUILayout.PasswordField("OpenCode Go API key", _openCodeKeyDraft, GUILayout.Width(340f));
+                    if (GUILayout.Button("Save & test", EditorStyles.miniButton, GUILayout.Width(90f)))
+                    {
+                        BridgeSettings.Secrets.OpenCodeApiKey = _openCodeKeyDraft.Trim();
+                        BridgeSettings.SaveSecrets();
+                        _openCodeKeyDraft = string.Empty;
+                        OpenCodeGoProvider.ResetResolvedBase();
+                        ChatService.RefreshModels(true);
+                        ChatService.TestConnection();
+                    }
+                    if (GUILayout.Button("Get a key", EditorStyles.miniButton, GUILayout.Width(74f)))
+                        Application.OpenURL("https://opencode.ai/auth");
+                }
+                if (!string.IsNullOrEmpty(BridgeSettings.Secrets.DeepSeekApiKey))
+                    EditorGUILayout.HelpBox("A key is saved for DeepSeek. If that key is actually an OpenCode Go key (the DeepSeek endpoint rejects it), reuse it here.", MessageType.Warning);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (!string.IsNullOrEmpty(BridgeSettings.Secrets.DeepSeekApiKey))
+                    {
+                        if (GUILayout.Button("Reuse the key saved for DeepSeek", EditorStyles.miniButton, GUILayout.Width(210f)))
+                            ReuseDeepSeekKeyForOpenCode();
+                    }
+                    GUILayout.Label("Default endpoint: " + BridgeSettings.Current.OpenCodeBaseUrl, EditorStyles.miniLabel);
+                }
+            }
+            if (!string.IsNullOrEmpty(ChatService.LastTestResult)) GUILayout.Label(ChatService.LastTestResult, EditorStyles.miniLabel);
+            if (ChatService.ConnectionState == ProviderConnectionState.Error && !string.IsNullOrEmpty(ChatService.ConnectionMessage))
+                EditorGUILayout.HelpBox(ChatService.ConnectionMessage, MessageType.Error);
+        }
+
+        void ReuseDeepSeekKeyForOpenCode()
+        {
+            if (string.IsNullOrEmpty(BridgeSettings.Secrets.DeepSeekApiKey)) return;
+            if (!EditorUtility.DisplayDialog("Reuse saved key?",
+                    "Copy the API key currently saved for the DeepSeek provider to OpenCode Go? The key is not displayed or logged.",
+                    "Use this key", "Cancel")) return;
+            BridgeSettings.Secrets.OpenCodeApiKey = BridgeSettings.Secrets.DeepSeekApiKey;
+            BridgeSettings.SaveSecrets();
+            OpenCodeGoProvider.ResetResolvedBase();
+            ChatService.RefreshModels(true);
+            ChatService.TestConnection();
+        }
+
+        void ReuseDeepSeekKeyForOpenCodeAndSwitch()
+        {
+            if (string.IsNullOrEmpty(BridgeSettings.Secrets.DeepSeekApiKey)) return;
+            if (!EditorUtility.DisplayDialog("Switch provider?",
+                    "Copy the saved DeepSeek key to OpenCode Go and switch the provider? The key is not displayed or logged.",
+                    "Switch and use key", "Cancel")) return;
+            BridgeSettings.Secrets.OpenCodeApiKey = BridgeSettings.Secrets.DeepSeekApiKey;
+            BridgeSettings.SaveSecrets();
+            OpenCodeGoProvider.ResetResolvedBase();
+            ChatService.SwitchProvider(BridgeSettings.ProviderOpenCode);
+            ChatService.RefreshModels(true);
+            ChatService.TestConnection();
+            _tab = 0;
         }
 
         void DrawOpenAiAccount()
@@ -1486,6 +1573,7 @@ namespace UnityAIBridge
 
                 if (ChatService.CurrentProviderId == BridgeSettings.ProviderChatGpt) DrawChatGptSettings();
                 else if (ChatService.CurrentProviderId == BridgeSettings.ProviderDeepSeek) DrawDeepSeekSettings();
+                else if (ChatService.CurrentProviderId == BridgeSettings.ProviderOpenCode) DrawOpenCodeSettings();
                 else if (ChatService.CurrentProviderId == BridgeSettings.ProviderOpenAi) DrawOpenAiSettings();
                 else DrawOllamaSettings();
 
@@ -1624,6 +1712,13 @@ namespace UnityAIBridge
                     Application.OpenURL("https://api-docs.deepseek.com/quick_start/pricing");
             }
             if (!string.IsNullOrEmpty(ChatService.LastTestResult)) EditorGUILayout.HelpBox(ChatService.LastTestResult, ChatService.ConnectionState == ProviderConnectionState.Error ? MessageType.Error : MessageType.Info);
+            if (ChatService.ConnectionState == ProviderConnectionState.Error && !string.IsNullOrEmpty(ChatService.ConnectionMessage) &&
+                ChatService.ConnectionMessage.IndexOf("401", StringComparison.Ordinal) >= 0)
+            {
+                EditorGUILayout.HelpBox("If this is an OpenCode Go key, it is not valid at api.deepseek.com. Use it with the OpenCode Go provider instead.", MessageType.Warning);
+                if (!string.IsNullOrEmpty(BridgeSettings.Secrets.DeepSeekApiKey) && GUILayout.Button("Switch to OpenCode Go and reuse this key", GUILayout.Width(260f)))
+                    ReuseDeepSeekKeyForOpenCodeAndSwitch();
+            }
             string deepSeekModel = EditorGUILayout.TextField("Selected model", ChatService.CurrentModel);
             if (deepSeekModel != ChatService.CurrentModel) ChatService.SelectModel(deepSeekModel);
             BridgeSettings.Current.DeepSeekThinking = EditorGUILayout.Toggle("Thinking / reasoning mode", BridgeSettings.Current.DeepSeekThinking);
@@ -1632,6 +1727,56 @@ namespace UnityAIBridge
             BridgeSettings.Current.DeepSeekReasoningEffort = new[] { "low", "high", "max" }[effortIndex];
             BridgeSettings.Current.DeepSeekMaxTokens = EditorGUILayout.IntField("Max output tokens", BridgeSettings.Current.DeepSeekMaxTokens);
             EditorGUILayout.HelpBox("Models: deepseek-flash (V4.1 Flash) and deepseek-v4-pro. Thinking mode supports low/high/max effort; required/named tool choice is not available in thinking mode, so the bridge uses auto. Cost is an estimate from the current public rates and peak/off-peak UTC windows.", MessageType.None);
+        }
+
+        void DrawOpenCodeSettings()
+        {
+            EditorGUILayout.Space(8f);
+            EditorGUILayout.LabelField("OpenCode Go", EditorStyles.boldLabel);
+            BridgeSettings.Current.OpenCodeBaseUrl = EditorGUILayout.TextField("Base URL", BridgeSettings.Current.OpenCodeBaseUrl);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                string key = BridgeSettings.Secrets.OpenCodeApiKey;
+                _openCodeKeyDraft = EditorGUILayout.PasswordField(key.Length == 0 ? "API key" : "API key (" + BridgeSettings.Mask(key) + ")", _openCodeKeyDraft);
+                if (GUILayout.Button("Save key", EditorStyles.miniButton, GUILayout.Width(76f)))
+                {
+                    BridgeSettings.Secrets.OpenCodeApiKey = _openCodeKeyDraft.Trim();
+                    BridgeSettings.SaveSecrets();
+                    _openCodeKeyDraft = string.Empty;
+                    OpenCodeGoProvider.ResetResolvedBase();
+                    ChatService.RefreshModels(true);
+                }
+                if (GUILayout.Button("Clear", EditorStyles.miniButton, GUILayout.Width(54f)))
+                {
+                    BridgeSettings.Secrets.OpenCodeApiKey = string.Empty;
+                    BridgeSettings.SaveSecrets();
+                    ChatService.RefreshModels(true);
+                }
+            }
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                using (new EditorGUI.DisabledScope(ChatService.IsTesting))
+                {
+                    if (GUILayout.Button(ChatService.IsTesting ? "Testing..." : "Test connection", EditorStyles.miniButton, GUILayout.Width(110f)))
+                        ChatService.TestConnection();
+                }
+                if (GUILayout.Button("Get an OpenCode key", EditorStyles.miniButton, GUILayout.Width(140f)))
+                    Application.OpenURL("https://opencode.ai/auth");
+                if (!string.IsNullOrEmpty(BridgeSettings.Secrets.DeepSeekApiKey))
+                {
+                    if (GUILayout.Button("Reuse saved DeepSeek key", EditorStyles.miniButton, GUILayout.Width(170f)))
+                        ReuseDeepSeekKeyForOpenCode();
+                }
+            }
+            if (!string.IsNullOrEmpty(ChatService.LastTestResult))
+                EditorGUILayout.HelpBox(ChatService.LastTestResult, ChatService.ConnectionState == ProviderConnectionState.Error ? MessageType.Error : MessageType.Info);
+            EditorGUILayout.HelpBox(
+                "OpenCode Go exposes OpenAI-compatible chat-completions models (DeepSeek, Kimi, GLM, MiMo and others). " +
+                "The default base URL is https://opencode.ai/zen/go/v1; the alternate https://opencode.ai/inference/go/openai/v1 is tried if the default is unavailable. " +
+                "Some OpenCode Go models (for example GPT/Grok entries) use a Responses endpoint and are not available through this provider. " +
+                "OpenCode Go usage is governed by your OpenCode subscription; it is not OpenAI or DeepSeek API billing.",
+                MessageType.None);
+            EditorGUILayout.LabelField("Model", ChatService.CurrentModel);
         }
 
         void DrawOpenAiSettings()

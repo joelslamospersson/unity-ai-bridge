@@ -337,7 +337,7 @@ namespace UnityAIBridge
         {
             switch (e.StatusCode)
             {
-                case 401: return "DeepSeek rejected the API key. Check it in Settings. (" + e.Message + ")";
+                case 401: return "DeepSeek rejected the API key. Check it in Settings. If this is an OpenCode Go key, switch to the OpenCode Go provider. (" + e.Message + ")";
                 case 402: return "DeepSeek account has insufficient balance. Top up at platform.deepseek.com. (" + e.Message + ")";
                 case 429: return "DeepSeek rate limit reached. Wait a moment and retry. (" + e.Message + ")";
                 case 400: return "DeepSeek rejected the request (check model/thinking/tool settings). " + e.Message;
