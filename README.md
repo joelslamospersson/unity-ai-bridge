@@ -4,7 +4,7 @@
 
 An independent, MIT-licensed Unity Editor extension that connects AI assistants to your development workflow. Chat with ChatGPT, DeepSeek, OpenCode Go, OpenAI API, or Ollama, inspect project context, and manage scripts, scenes, prefabs, and assets through permission-controlled tools.
 
-> Unity AI Bridge is independently developed. It is not affiliated with, endorsed by, or sponsored by Unity Technologies, OpenAI, DeepSeek, or Ollama.
+> Unity AI Bridge is independently developed. It is not affiliated with, endorsed by, or sponsored by Unity Technologies, OpenAI, DeepSeek, OpenCode, or Ollama.
 
 ## Features
 
