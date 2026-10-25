@@ -16,6 +16,7 @@ namespace UnityAIBridge
         readonly Button _pending;
         readonly Button _jump;
         readonly Button _older;
+        readonly Label _empty;
         readonly VisualElement _attachments;
         readonly Label _hint;
 
@@ -51,6 +52,16 @@ namespace UnityAIBridge
             _jump.style.display = DisplayStyle.None;
             top.Add(_jump);
             Add(top);
+
+            _empty = new Label("Start a conversation with Unity AI Bridge.\nCtrl+Enter sends a message; use Attach selection to add project files.");
+            _empty.style.whiteSpace = WhiteSpace.Normal;
+            _empty.style.fontSize = 12;
+            _empty.style.unityTextAlign = TextAnchor.MiddleCenter;
+            _empty.style.marginTop = 22;
+            _empty.style.marginBottom = 22;
+            _empty.style.color = EditorGUIUtility.isProSkin ? new Color(0.55f, 0.55f, 0.55f) : new Color(0.4f, 0.4f, 0.4f);
+            _empty.style.display = DisplayStyle.None;
+            Add(_empty);
 
             _list = new ListView
             {
@@ -175,6 +186,7 @@ namespace UnityAIBridge
             UpdatePending();
             UpdateAttachments();
             _older.style.display = ChatService.HasOlderMessages ? DisplayStyle.Flex : DisplayStyle.None;
+            _empty.style.display = ChatService.Messages.Count == 0 ? DisplayStyle.Flex : DisplayStyle.None;
             if (!_dirty) return;
             _dirty = false;
             Apply();
