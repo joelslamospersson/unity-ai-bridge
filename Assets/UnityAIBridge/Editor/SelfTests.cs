@@ -692,6 +692,156 @@ namespace UnityAIBridge
             var loopTest = RunAgentToolLoopTest();
             while (loopTest.MoveNext()) yield return loopTest.Current;
 
+            // 34. Paged history: 125 messages span three pages; only the latest page opens
+            try
+            {
+                const string provider = "selftest-history";
+                ChatHistory.ClearProvider(provider);
+                var meta = ChatHistory.NewConversation(provider, "test-model", "History test");
+                for (int i = 0; i < 125; i++)
+                {
+                    ChatHistory.Append(meta, new ChatMessage
+                    {
+                        Id = "m" + i,
+                        Role = i % 2 == 0 ? "user" : "assistant",
+                        Content = "message " + i + (i == 60 ? " needle" : ""),
+                        TimeLocal = "12:00:00"
+                    });
+                }
+                int oldest;
+                var latest = ChatHistory.LoadLatestPage(meta, out oldest);
+                int newOldest;
+                var middle = ChatHistory.LoadOlderPage(meta, oldest, out newOldest);
+                bool paged = latest.Count == 25 && oldest == 2 && middle != null && middle.Count == 50 && newOldest == 1;
+                var matches = ChatHistory.List(provider, "needle");
+                bool searched = matches.Count == 1 && matches[0].Id == meta.Id;
+                ChatHistory.ClearConversation(meta);
+                var empty = ChatHistory.LoadLatestPage(meta, out oldest);
+                ChatHistory.Delete(meta);
+                bool cleared = meta.MessageCount == 0 && meta.PageCount == 0 && empty.Count == 0 &&
+                               !Directory.Exists(ChatHistory.Root(meta));
+                Check("history_paged_lazy_search_clear", paged && searched && cleared,
+                    "latest=" + latest.Count + " oldest=" + oldest + " middle=" + (middle == null ? -1 : middle.Count) +
+                    " search=" + matches.Count + " cleared=" + cleared);
+                ChatHistory.ClearProvider(provider);
+            }
+            catch (Exception e) { Check("history_paged_lazy_search_clear", false, e.Message); }
+
+            // 35. Model context is capped separately from display history
+            try
+            {
+                const string provider = "selftest-context";
+                ChatHistory.ClearProvider(provider);
+                var meta = ChatHistory.NewConversation(provider, "test-model", "Context test");
+                var messages = new List<LlmMessage>();
+                for (int i = 0; i < 200; i++) messages.Add(new LlmMessage { Role = i % 2 == 0 ? "user" : "assistant", Content = "turn " + i });
+                ChatHistory.SaveContext(meta, messages);
+                var loaded = ChatHistory.LoadContext(meta);
+                bool ok = loaded.Count == ChatHistory.ContextLimit && loaded[0].Content == "turn 80" && loaded[loaded.Count - 1].Content == "turn 199";
+                Check("history_context_capped", ok, "count=" + loaded.Count + " first=" + (loaded.Count > 0 ? loaded[0].Content : "?"));
+                ChatHistory.ClearProvider(provider);
+            }
+            catch (Exception e) { Check("history_context_capped", false, e.Message); }
+
+            // 36. Markdown rendering and syntax highlighting (no GUI needed)
+            try
+            {
+                var parent = new UnityEngine.UIElements.VisualElement();
+                MarkdownView.Render(parent, "# Title\n\n**bold** and `inline` with <tag>\n\n```csharp\npublic class Demo { int x = 42; }\n```\n\n- one\n- two");
+                string inline = MarkdownView.Inline("a < b & c");
+                string highlighted = MarkdownView.Highlight("public class Demo { int x = 42; }", "csharp");
+                bool ok = parent.childCount >= 4 && inline.IndexOf("&lt;", StringComparison.Ordinal) >= 0 &&
+                          inline.IndexOf("&amp;", StringComparison.Ordinal) >= 0 && highlighted.IndexOf("<color=", StringComparison.Ordinal) >= 0;
+                Check("markdown_and_syntax", ok, "blocks=" + parent.childCount + " inline=" + inline);
+            }
+            catch (Exception e) { Check("markdown_and_syntax", false, e.Message); }
+
+            // 37. Chat panel can be constructed without a live provider
+            try
+            {
+                var panel = new ChatPanel();
+                bool ok = panel.childCount > 0;
+                panel.Detach();
+                Check("chat_panel_builds", ok, "children=" + panel.childCount);
+            }
+            catch (Exception e) { Check("chat_panel_builds", false, e.Message); }
+
+            // 38. Full UI Toolkit shell builds in-memory
+            try
+            {
+                var window = ScriptableObject.CreateInstance<UnityAIBridgeWindow>();
+                int children = -1;
+                try
+                {
+                    window.SelfTestCreateUi();
+                    children = window.SelfTestRootChildren;
+                }
+                finally
+                {
+                    window.SelfTestTeardown();
+                    UnityEngine.Object.DestroyImmediate(window);
+                }
+                Check("window_ui_shell_builds", children >= 3, "root children=" + children);
+            }
+            catch (Exception e) { Check("window_ui_shell_builds", false, e.ToString()); }
+
+            // 39. Activity group with file cards renders without a panel
+            try
+            {
+                var panel = new ChatPanel();
+                var view = new ChatMessageView(panel);
+                view.Bind(new ChatMessage
+                {
+                    Id = "activity-test",
+                    Role = "activity",
+                    TimeLocal = "12:00:00",
+                    Activities = new List<ChatToolActivity>
+                    {
+                        new ChatToolActivity { CallId = "c1", Tool = "read_project_file", Status = "Done", Ok = true, Detail = "Read Assets/Test.cs" },
+                        new ChatToolActivity { CallId = "c2", Tool = "create_script", Status = "Done", Ok = true, Detail = "Staged a change", ChangeIds = new List<string> { "chg1" } }
+                    },
+                    Files = new List<ChatFileRef>
+                    {
+                        new ChatFileRef { Path = "Assets/Test.cs", CallId = "c1", Status = "Read", IsRead = true, Title = "Test.cs" },
+                        new ChatFileRef { Path = "Assets/New.cs", ChangeId = "chg1", Status = "Pending", Title = "New.cs" }
+                    }
+                });
+                bool ok = view.childCount > 0;
+                panel.Detach();
+                Check("activity_group_file_cards", ok, "children=" + view.childCount);
+            }
+            catch (Exception e) { Check("activity_group_file_cards", false, e.ToString()); }
+
+            // 40. History load benchmark at representative sizes
+            try
+            {
+                var details = new List<string>();
+                bool ok = true;
+                foreach (int count in new[] { 100, 500, 1000 })
+                {
+                    string provider = "selftest-bench-" + count;
+                    ChatHistory.ClearProvider(provider);
+                    var meta = ChatHistory.NewConversation(provider, "bench", "Bench " + count);
+                    for (int i = 0; i < count; i++)
+                        ChatHistory.Append(meta, new ChatMessage { Id = "b" + i, Role = "user", Content = "benchmark message " + i });
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    int latestCount = 0;
+                    for (int i = 0; i < 10; i++)
+                    {
+                        int ignored;
+                        var page = ChatHistory.LoadLatestPage(meta, out ignored);
+                        latestCount = page.Count;
+                    }
+                    sw.Stop();
+                    double avg = sw.Elapsed.TotalMilliseconds / 10.0;
+                    details.Add(count + "=" + avg.ToString("0.00") + "ms/page" + latestCount);
+                    if (latestCount > ChatHistory.PageSize) ok = false;
+                    ChatHistory.ClearProvider(provider);
+                }
+                Check("history_load_benchmark", ok, string.Join(" ", details.ToArray()));
+            }
+            catch (Exception e) { Check("history_load_benchmark", false, e.ToString()); }
+
             Finish();
         }
 

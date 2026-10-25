@@ -8,7 +8,9 @@ An independent, MIT-licensed Unity Editor extension that connects AI assistants 
 
 ## Features
 
-- Native streaming chat window: **Tools → Unity AI Bridge**, with a windowed history that renders only recent messages and loads older ones as you scroll up
+- **UI Toolkit chat** inside **Tools → Unity AI Bridge**: virtualized `DynamicHeight` list, conversation sidebar, paged history, lazy older-message loading and a conversation search
+- Responsive streaming at roughly 10–15 FPS, with Markdown, syntax-highlighted code blocks, reasoning, file cards and compact tool groups
+- Token-aware context: recent turns plus a local older-context summary; cached project context and tool-based file reads instead of pasting the whole project
 - **ChatGPT** via Sign in with ChatGPT (OAuth + PKCE, ChatGPT plan usage)
 - **DeepSeek** API with model discovery, reasoning, streaming tool calls, usage and estimated cost
 - **OpenCode Go** with OpenAI-compatible chat completions, model discovery and tool calling

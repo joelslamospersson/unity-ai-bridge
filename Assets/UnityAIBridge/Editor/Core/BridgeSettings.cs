@@ -43,7 +43,8 @@ namespace UnityAIBridge
         public string ChatGptModel = "";
 
         public double Temperature = 0.2;
-        public int MaxOutputTokens = 4000;
+        public int MaxOutputTokens = 2000;
+        public string ResponseMode = "concise";
         public int RequestTimeoutSeconds = 300;
         public int MaxAgentSteps = 8;
         public bool ShowReasoning = true;
@@ -173,7 +174,8 @@ namespace UnityAIBridge
             if (MaxContextCharacters < 1000) MaxContextCharacters = 60000;
             if (MaxAgentSteps < 1 || MaxAgentSteps > 24) MaxAgentSteps = 8;
             if (RequestTimeoutSeconds < 10) RequestTimeoutSeconds = 300;
-            if (MaxOutputTokens < 256) MaxOutputTokens = 4000;
+            if (MaxOutputTokens < 256) MaxOutputTokens = 2000;
+            if (string.IsNullOrEmpty(ResponseMode) || (ResponseMode != "concise" && ResponseMode != "balanced" && ResponseMode != "detailed")) ResponseMode = "concise";
             AccessLevel = Mathf.Clamp(AccessLevel, 0, 2);
             McpPort = Mathf.Clamp(McpPort <= 0 ? 7777 : McpPort, 1024, 65535);
         }

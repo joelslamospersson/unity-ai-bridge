@@ -11,7 +11,7 @@ using UnityEngine.SceneManagement;
 
 namespace UnityAIBridge
 {
-    public sealed class UnityAIBridgeWindow : EditorWindow
+    public sealed partial class UnityAIBridgeWindow : EditorWindow
     {
         const int TabChat = 0;
         const int TabProject = 1;
@@ -24,6 +24,8 @@ namespace UnityAIBridge
         static readonly string[] ProviderIds = { BridgeSettings.ProviderChatGpt, BridgeSettings.ProviderDeepSeek, BridgeSettings.ProviderOpenCode, BridgeSettings.ProviderOpenAi, BridgeSettings.ProviderOllama };
         static readonly string[] ProviderLabels = { "ChatGPT", "DeepSeek", "OpenCode Go", "OpenAI API", "Ollama (local)" };
         static readonly string[] LevelLabels = { "Read Only", "Ask Before Editing", "Project Write Access" };
+        static readonly string[] ResponseModeLabels = { "Concise", "Balanced", "Detailed" };
+        static readonly string[] ResponseModeValues = { "concise", "balanced", "detailed" };
         static readonly string[] PrimitiveLabels = { "Empty", "Cube", "Sphere", "Capsule", "Cylinder", "Plane", "Quad" };
         static readonly string[] PrimitiveValues = { "empty", "cube", "sphere", "capsule", "cylinder", "plane", "quad" };
         static readonly string[] FilterLabels = { "Point", "Bilinear", "Trilinear" };
@@ -120,6 +122,8 @@ namespace UnityAIBridge
             ChangeService.Changed += MarkDirty;
             ChatService.Changed += MarkDirty;
             BridgeLog.Changed += MarkDirty;
+            ChangeService.Changed += OnUiChanged;
+            ChatService.Changed += OnUiChanged;
             _mcpPortText = BridgeSettings.Current.McpPort.ToString();
             if (_sprites.Count == 0) RefreshSpriteList();
         }
@@ -129,18 +133,27 @@ namespace UnityAIBridge
             ChangeService.Changed -= MarkDirty;
             ChatService.Changed -= MarkDirty;
             BridgeLog.Changed -= MarkDirty;
+            ChangeService.Changed -= OnUiChanged;
+            ChatService.Changed -= OnUiChanged;
+            DetachUi();
         }
 
-        void MarkDirty() { _needsRepaint = true; }
+        void MarkDirty()
+        {
+            _needsRepaint = true;
+            _headerDirty = true;
+            if (_uiRoot != null) _uiRoot.MarkDirtyRepaint();
+        }
 
         void Update()
         {
             if (!_needsRepaint) return;
             _needsRepaint = false;
             Repaint();
+            if (_uiRoot != null) _uiRoot.MarkDirtyRepaint();
         }
 
-        void OnGUI()
+        void DrawLegacyShell()
         {
             DrawHeader();
 
@@ -1957,6 +1970,10 @@ namespace UnityAIBridge
                 settings.MaxContextCharacters = EditorGUILayout.IntField("Max context characters", settings.MaxContextCharacters);
                 settings.MaxAgentSteps = EditorGUILayout.IntSlider("Max tool steps per request", settings.MaxAgentSteps, 1, 24);
                 settings.ShowReasoning = EditorGUILayout.Toggle("Show reasoning / thinking", settings.ShowReasoning);
+                int responseIndex = Math.Max(0, Array.IndexOf(ResponseModeValues, settings.ResponseMode));
+                settings.ResponseMode = ResponseModeValues[EditorGUILayout.Popup("Response style", responseIndex, ResponseModeLabels)];
+                settings.MaxOutputTokens = EditorGUILayout.IntField("Default max output tokens", settings.MaxOutputTokens);
+                EditorGUILayout.HelpBox("Concise is the default: result first, short bullets, small code snippets, no repeated context. Output tokens are separate from the context budget.", MessageType.None);
                 EditorGUILayout.LabelField("Project notes (sent with every request)", EditorStyles.miniLabel);
                 settings.ProjectNotes = EditorGUILayout.TextArea(settings.ProjectNotes, GUILayout.Height(56f));
 

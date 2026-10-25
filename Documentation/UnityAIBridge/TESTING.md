@@ -46,14 +46,10 @@ The suite pauses automatic asset refresh, uses `Assets/__UAIBTests__/`, starts l
 Unity 6000.6.7f1, Linux Editor, batch mode against a copy:
 
 ```
-37 passed, 0 failed   (~2 s of test time)
+44 passed, 0 failed   (~4.4 s of test time)
 ```
 
-Live Editor result after the rebranding and migration:
-
-```
-37 passed, 0 failed   (2.87 s)
-```
+The UI tests build the chat panel and the full UI Toolkit shell in memory; they do not capture pixels or simulate mouse input.
 
 | # | Test | Verifies |
 | --- | --- | --- |
@@ -94,6 +90,13 @@ Live Editor result after the rebranding and migration:
 | 35 | `mcp_catalog_oauth_opencode` | Catalog OAuth HTTP server install/remove (GitHub) in OpenCode v2 |
 | 36 | `agent_tool_loop_stages_change` | Real tool loop: model → tool → result → final answer; write is staged, not applied |
 | 37 | `agent_tool_loop_apply_after_approval` | Human approval + apply writes the file correctly |
+| 38 | `history_paged_lazy_search_clear` | 125 messages span pages; latest-page load, older-page load, search and clear |
+| 39 | `history_context_capped` | Model context keeps the last 120 messages while display history stays separate |
+| 40 | `markdown_and_syntax` | Markdown blocks, escaping and syntax-highlight tags |
+| 41 | `chat_panel_builds` | Chat panel / `ListView` construction without a panel |
+| 42 | `window_ui_shell_builds` | Full UI Toolkit shell builds in memory |
+| 43 | `activity_group_file_cards` | Compact tool group with activities, read file card and change card |
+| 44 | `history_load_benchmark` | Latest-page load at 100/500/1000 messages (representative local benchmark) |
 
 ## Migration checks
 
@@ -110,18 +113,19 @@ The upgrade moves the previous configuration and library directories without los
 - **Real ChatGPT OAuth consent**: requires an eligible OpenAI account and browser interaction. PKCE, URL construction, ID-token crypto, refresh and the ChatGPT Responses request shape are tested locally.
 - **Real DeepSeek/OpenAI/Ollama inference**: no credentials are included. Protocol handling is tested against local mock servers; live inference depends on your accounts.
 - **Applying a `.cs` change end-to-end**: this triggers a domain reload, which would interrupt the runner. File-level create/modify is tested; script application is verified manually.
-- **UI layout/interaction**: native IMGUI; no UI automation.
+- **UI layout/interaction**: UI Toolkit shell and chat are smoke-tested in memory; pixel layout and real mouse/keyboard interaction are checked manually. Legacy tabs use IMGUI.
 - **Live model availability**: depends on your accounts.
 
 ## Manual checklist
 
 1. Open **Tools → Unity AI Bridge**. Switch all tabs; confirm no Console exceptions.
-2. DeepSeek: enter a key → **Save & test** → model dropdown fills → send "Inspect my current Unity scene." Watch streaming, reasoning, tool messages and token/cost line.
-3. Ask: "Create a basic player controller." Confirm changes appear in **Pending Changes** with diffs; approve and apply; confirm compilation.
-4. Reject a change and confirm no file is written.
-5. ChatGPT: press **Continue with ChatGPT** → complete consent → confirm the account label and model list. If plan usage is not granted, confirm the UI says so instead of connecting.
-6. Switch provider mid-session; confirm each provider keeps its own conversation and model.
-7. Sign out of ChatGPT; confirm tokens are cleared and the provider shows signed out.
-8. Set **Read Only** and confirm write tools are not offered and direct staging is rejected.
-9. Import a texture, configure it as a sprite, and create/assign a prefab.
-10. Verify Explorer/Scene/Assets/Changes/MCP/Logs behave as expected.
+2. In Chat: create a new conversation, send a short request, verify streaming updates at a steady rate, scroll up to load older pages, search/rename/delete a conversation, and confirm the model/context/output settings are respected.
+3. DeepSeek: enter a key → **Save & test** → model dropdown fills → send "Inspect my current Unity scene." Watch streaming, reasoning, tool messages and token/cost line.
+4. Ask: "Create a basic player controller." Confirm changes appear in **Pending Changes** with diffs; approve and apply; confirm compilation.
+5. Reject a change and confirm no file is written.
+6. ChatGPT: press **Continue with ChatGPT** → complete consent → confirm the account label and model list. If plan usage is not granted, confirm the UI says so instead of connecting.
+7. Switch provider mid-session; confirm each provider keeps its own conversation and model.
+8. Sign out of ChatGPT; confirm tokens are cleared and the provider shows signed out.
+9. Set **Read Only** and confirm write tools are not offered and direct staging is rejected.
+10. Import a texture, configure it as a sprite, and create/assign a prefab.
+11. Verify Explorer/Scene/Assets/Changes/MCP/Logs behave as expected.

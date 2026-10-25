@@ -8,7 +8,10 @@ It is not affiliated with, endorsed by, or sponsored by Unity Technologies, Open
 
 ## Highlights
 
-- **Live streaming chat** inside a native Unity Editor window with a windowed/virtualized history: only the recent messages render, scroll up to load older messages smoothly
+- **UI Toolkit chat** with a virtualized `ListView` (`DynamicHeight`), conversation sidebar, paged history and lazy older-page loading
+- **Responsive streaming** with buffered 10–15 FPS UI updates, periodic crash-recovery checkpoints, Markdown, syntax-highlighted code blocks, file cards and compact tool groups
+- **Token-aware context**: recent turns plus an older-context summary; project context is cached and script source is read through tools instead of being pasted into every request
+- **Response modes** (Concise/Balanced/Detailed) and a separately configurable output-token budget
 - **ChatGPT** via Sign in with ChatGPT (OAuth + PKCE, ChatGPT plan usage)
 - **DeepSeek** API with model discovery, reasoning, streaming tool calls, usage and estimated cost
 - **OpenCode Go** with OpenAI-compatible chat completions, model discovery and tool calling
@@ -38,7 +41,14 @@ No runtime scripts or build dependencies are added; all code lives in an `Editor
 
 ## Live chat
 
-The window includes a provider and model dropdown, connection status, permission mode, streaming chat, Markdown/code blocks, reasoning display, stop generation, tool progress, and per-provider conversation history.
+The chat window includes a provider and model dropdown, connection status, permission mode, streaming replies, reasoning, stop generation, compact tool progress with file cards, and per-provider conversation history.
+
+- Display history is stored on disk in pages of **50** messages. Opening a conversation reads only the latest page; **Load older messages** fetches earlier pages on demand.
+- Model context is stored separately, capped at **120** messages, and trimmed to recent user turns under the configured character budget. Older turns are represented by a short local summary.
+- Project context is a cached, lightweight summary; exact files are read through tools. Attach up to eight project files to include them explicitly.
+- **New chat**, rename, delete, clear history and search are available in the conversation sidebar.
+- File cards come from structured tool results/change IDs, not regex scraping. Clicking a change card opens it in **Pending Changes**; read cards ping the asset.
+- Streamed UI updates are throttled to roughly 12 FPS; the transcript is not rebuilt for every token.
 
 Useful example requests:
 
@@ -111,6 +121,7 @@ See [TESTING.md](TESTING.md).
 Existing installations are migrated automatically:
 
 - Settings, credentials, pending changes, conversations and logs from the previous configuration directory are moved to `~/.config/unity-ai-bridge/`.
+- Legacy `chat-<provider>.json` sessions are imported once into the paged `history/<provider>/<conversation>/` store; the old file is renamed with a `.migrated` suffix.
 - Backups and test artifacts are moved from the previous plugin library folder to `Library/UnityAIBridge/`.
 - Existing ChatGPT OAuth tokens and client registrations are retained. The new agent name is used for new registrations; an existing ChatGPT registration may continue to show its original display name until you disconnect and reconnect it in ChatGPT settings.
 - Existing MCP client configurations use the new server name `unity-ai-bridge`; update those clients after upgrading.
@@ -120,7 +131,7 @@ Existing installations are migrated automatically:
 
 - Image generation is not implemented. The Asset Manager imports and configures existing artwork.
 - Animation authoring is limited to inspecting controllers and assigning them; there is no keyframe/timeline editor.
-- The UI is native IMGUI and is not covered by automated UI tests.
+- The chat UI is UI Toolkit, while the Project/Changes/MCP/Settings/Logs tabs are still hosted through `IMGUIContainer`. The suite performs in-memory UI smoke tests and builds the full shell; it does not automate pixel layout or real mouse interaction.
 - Provider features and availability can change; the extension reports provider errors rather than hiding them.
 - Historical information in old Git commits is not removed by editing files. See the repository privacy notes in the release summary.
 

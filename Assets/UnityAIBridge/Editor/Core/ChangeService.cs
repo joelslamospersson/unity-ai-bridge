@@ -506,6 +506,7 @@ namespace UnityAIBridge
                 try { AssetDatabase.Refresh(); } catch { }
             }
 
+            ProjectService.InvalidateContextCache();
             Save();
             RaiseChanged();
             return error;

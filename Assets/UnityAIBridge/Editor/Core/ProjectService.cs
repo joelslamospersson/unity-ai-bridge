@@ -203,6 +203,43 @@ namespace UnityAIBridge
             return array;
         }
 
+        static string _agentContextCache;
+        static DateTime _agentContextCacheTime;
+        static string _agentContextCacheKey;
+
+        /// <summary>
+        /// Lightweight context for live chat. Script source is omitted; the agent reads
+        /// exact files through tools. The snapshot is cached briefly and invalidated on imports.
+        /// </summary>
+        public static string BuildAgentContext(BridgeSettings settings, List<string> selectedFiles)
+        {
+            bool hasAttachments = selectedFiles != null && selectedFiles.Count > 0;
+            string key = (settings.IncludeSceneContext ? "s" : "-") +
+                         (settings.IncludeConsoleContext ? "c" : "-") +
+                         (settings.IncludeFileTree ? "f" : "-") +
+                         "|" + settings.MaxContextCharacters + "|" + settings.ProjectNotes;
+            if (!hasAttachments && _agentContextCache != null && _agentContextCacheKey == key &&
+                (DateTime.UtcNow - _agentContextCacheTime).TotalSeconds < 30)
+                return _agentContextCache;
+
+            string result;
+            try { result = BuildContext(settings, selectedFiles, false); }
+            catch (Exception e) { return "(project context unavailable: " + e.Message + ")"; }
+            if (!hasAttachments)
+            {
+                _agentContextCache = result;
+                _agentContextCacheKey = key;
+                _agentContextCacheTime = DateTime.UtcNow;
+            }
+            return result;
+        }
+
+        public static void InvalidateContextCache()
+        {
+            _agentContextCache = null;
+            _agentContextCacheKey = null;
+        }
+
         public static string BuildContext(BridgeSettings settings, List<string> selectedFiles, bool includeFileContents = true)
         {
             var sb = new StringBuilder();
@@ -330,6 +367,14 @@ namespace UnityAIBridge
                 sb.AppendLine("[" + finding["severity"].AsString() + "] " + finding["area"].AsString() + ": " + finding["message"].AsString());
             }
             return sb.ToString();
+        }
+    }
+
+    internal sealed class ProjectContextAssetWatcher : AssetPostprocessor
+    {
+        static void OnPostprocessAllAssets(string[] imported, string[] deleted, string[] moved, string[] movedFrom)
+        {
+            ProjectService.InvalidateContextCache();
         }
     }
 }

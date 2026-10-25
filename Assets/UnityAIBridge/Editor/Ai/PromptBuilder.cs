@@ -9,6 +9,19 @@ namespace UnityAIBridge
         /// no assumptions about the project's genre, mechanics, platform, render pipeline
         /// or folder layout; the agent must inspect the project first.
         /// </summary>
+        public static string ResponseModeInstruction(string mode)
+        {
+            switch ((mode ?? "concise").Trim().ToLowerInvariant())
+            {
+                case "detailed":
+                    return "RESPONSE MODE: Detailed. Explain reasoning, tradeoffs, and verification, but do not dump whole files or repeat tool output.";
+                case "balanced":
+                    return "RESPONSE MODE: Balanced. Give the result and enough explanation to continue safely; prefer short sections and focused code snippets.";
+                default:
+                    return "RESPONSE MODE: Concise (default). Lead with the result, use short bullets, avoid filler and repeated context. Do not paste whole files; show only changed or essential code. Keep tool progress brief and state compilation/test results honestly.";
+            }
+        }
+
         public static string AgentSystemPrompt(BridgeSettings settings)
         {
             var sb = new StringBuilder();
