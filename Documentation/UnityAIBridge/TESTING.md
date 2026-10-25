@@ -46,13 +46,13 @@ The suite pauses automatic asset refresh, uses `Assets/__UAIBTests__/`, starts l
 Unity 6000.6.7f1, Linux Editor, batch mode against a copy:
 
 ```
-32 passed, 0 failed   (~2 s of test time)
+35 passed, 0 failed   (~2 s of test time)
 ```
 
 Live Editor result after the rebranding and migration:
 
 ```
-32 passed, 0 failed   (3.01 s)
+35 passed, 0 failed   (2.72 s)
 ```
 
 | # | Test | Verifies |
@@ -78,7 +78,7 @@ Live Editor result after the rebranding and migration:
 | 19 | `invalid_sprite_source_rejected` | Rooted source outside the staging area refused |
 | 20 | `mcp_http_roundtrip` | MCP `initialize`, `tools/list` (22 tools), `tools/call`, `401` without token |
 | 21 | `provider_connection_error` | Connection refusal surfaced as a readable error |
-| 22 | `provider_factory` | ChatGPT/DeepSeek/OpenAI/Ollama factories and IDs |
+| 22 | `provider_factory` | ChatGPT/DeepSeek/OpenCode Go/OpenAI/Ollama factories and IDs |
 | 23 | `chatgpt_pkce` | RFC 7636 PKCE S256 test vector |
 | 24 | `chatgpt_authorize_url` | OAuth parameters, scopes, resource, agent hint, host ID |
 | 25 | `chatgpt_id_token_validation` | RS256 JWKS signature, nonce, audience, issuer, claims |
@@ -87,8 +87,11 @@ Live Editor result after the rebranding and migration:
 | 28 | `chatgpt_oauth_responses_request` | ChatGPT route uses `additional_tools`, `store:false`, `stream:true`, no unsupported fields, bearer OAuth token |
 | 29 | `chatgpt_token_refresh` | Form-encoded refresh grant, rotating tokens, secret persistence |
 | 30 | `opencode_stream_and_tools` | OpenCode Go model discovery, chat-completions streaming, reasoning, tools and usage |
-| 31 | `agent_tool_loop_stages_change` | Real tool loop: model → tool → result → final answer; write is staged, not applied |
-| 32 | `agent_tool_loop_apply_after_approval` | Human approval + apply writes the file correctly |
+| 31 | `mcp_installer_json_merge` | JSON client config merge/remove preserves existing servers |
+| 32 | `mcp_installer_codex_toml` | Codex TOML section merge/remove preserves existing config |
+| 33 | `mcp_installer_opencode_v2` | OpenCode `mcp.servers` merge/remove preserves existing servers |
+| 34 | `agent_tool_loop_stages_change` | Real tool loop: model → tool → result → final answer; write is staged, not applied |
+| 35 | `agent_tool_loop_apply_after_approval` | Human approval + apply writes the file correctly |
 
 ## Migration checks
 

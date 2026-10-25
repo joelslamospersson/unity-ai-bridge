@@ -9,6 +9,8 @@
 - Renamed namespaces, classes, editor window, menu, MCP server name and configuration identifiers.
 - Preserved ChatGPT OAuth client registrations and credentials; new registrations use the new agent name.
 - Added OpenCode Go provider support (OpenAI-compatible chat completions, model discovery, required session header).
+- Redesigned the Editor window with a compact sidebar, grouped Project tabs, simpler chat options and an MCP dashboard.
+- Added one-click MCP client installers (Codex, OpenCode, Cursor, VS Code, Claude Code), backups and automatic MCP start/stop.
 - Added privacy cleanup across documentation, tests, examples and UI strings.
 
 ## 1.0.0

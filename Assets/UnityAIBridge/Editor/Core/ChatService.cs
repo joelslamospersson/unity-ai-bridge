@@ -282,6 +282,7 @@ namespace UnityAIBridge
 
             _loadingModels = true;
             ConnectionMessage = "Loading models...";
+            string fingerprint = ProviderFingerprint(providerId);
             Raise();
             Task.Run(async () =>
             {
@@ -291,7 +292,7 @@ namespace UnityAIBridge
                     MainThread.Run(() =>
                     {
                         _loadingModels = false;
-                        if (CurrentProviderId != providerId) return;
+                        if (CurrentProviderId != providerId || fingerprint != ProviderFingerprint(providerId)) return;
                         _models = list ?? new List<ModelInfo>();
                         ConnectionState = ProviderConnectionState.Connected;
                         ConnectionMessage = "Connected · " + _models.Count + " model(s)";
@@ -311,7 +312,7 @@ namespace UnityAIBridge
                     MainThread.Run(() =>
                     {
                         _loadingModels = false;
-                        if (CurrentProviderId != providerId) return;
+                        if (CurrentProviderId != providerId || fingerprint != ProviderFingerprint(providerId)) return;
                         ConnectionState = ProviderConnectionState.Error;
                         ConnectionMessage = e.Message;
                         if (providerId == BridgeSettings.ProviderDeepSeek && _models.Count == 0)
@@ -337,6 +338,21 @@ namespace UnityAIBridge
                     });
                 }
             });
+        }
+
+        static string ProviderFingerprint(string providerId)
+        {
+            var settings = BridgeSettings.Current;
+            var secrets = BridgeSettings.Secrets;
+            switch (providerId)
+            {
+                case BridgeSettings.ProviderDeepSeek: return settings.DeepSeekBaseUrl + "|" + secrets.DeepSeekApiKey + "|" + settings.DeepSeekModel;
+                case BridgeSettings.ProviderOpenCode: return settings.OpenCodeBaseUrl + "|" + secrets.OpenCodeApiKey + "|" + settings.OpenCodeModel;
+                case BridgeSettings.ProviderOpenAi: return settings.OpenAiBaseUrl + "|" + secrets.OpenAiApiKey;
+                case BridgeSettings.ProviderOllama: return settings.OllamaUrl + "|" + secrets.OllamaApiKey;
+                case BridgeSettings.ProviderChatGpt: return secrets.ChatGptClientId + "|" + secrets.ChatGptEmail + "|" + secrets.ChatGptScopes;
+                default: return providerId;
+            }
         }
 
         static void UpdateConnectionFromProvider()

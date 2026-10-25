@@ -13,7 +13,14 @@ namespace UnityAIBridge
 {
     public sealed class UnityAIBridgeWindow : EditorWindow
     {
-        static readonly string[] TabNames = { "Chat", "Explorer", "Scene", "Assets", "Changes", "MCP", "Settings", "Logs" };
+        const int TabChat = 0;
+        const int TabProject = 1;
+        const int TabChanges = 2;
+        const int TabMcp = 3;
+        const int TabSettings = 4;
+        const int TabLogs = 5;
+        static readonly string[] TabNames = { "Chat", "Project", "Changes", "MCP", "Settings", "Logs" };
+        static readonly string[] ProjectTabNames = { "Explorer", "Scene", "Assets" };
         static readonly string[] ProviderIds = { BridgeSettings.ProviderChatGpt, BridgeSettings.ProviderDeepSeek, BridgeSettings.ProviderOpenCode, BridgeSettings.ProviderOpenAi, BridgeSettings.ProviderOllama };
         static readonly string[] ProviderLabels = { "ChatGPT", "DeepSeek", "OpenCode Go", "OpenAI API", "Ollama (local)" };
         static readonly string[] LevelLabels = { "Read Only", "Ask Before Editing", "Project Write Access" };
@@ -26,7 +33,11 @@ namespace UnityAIBridge
         static readonly string[] ComponentLabels = { "SpriteRenderer", "Image" };
 
         int _tab;
+        int _projectTab;
         bool _needsRepaint;
+        bool _showChatOptions;
+        bool _showAccountConfig;
+        bool _mcpAdvanced;
 
         Vector2 _chatScroll, _treeScroll, _explorerListScroll, _previewScroll, _sceneScroll, _inspectorScroll;
         Vector2 _assetListScroll, _assetDetailScroll, _changesListScroll, _diffScroll, _mcpScroll, _settingsScroll, _logsScroll;
@@ -123,22 +134,60 @@ namespace UnityAIBridge
         void OnGUI()
         {
             DrawHeader();
-            _tab = GUILayout.Toolbar(_tab, TabNames, EditorStyles.toolbarButton, GUILayout.Height(22f));
-            EditorGUILayout.Space(4f);
 
-            switch (_tab)
+            using (new EditorGUILayout.HorizontalScope())
             {
-                case 0: DrawChat(); break;
-                case 1: DrawExplorer(); break;
-                case 2: DrawScene(); break;
-                case 3: DrawAssets(); break;
-                case 4: DrawChanges(); break;
-                case 5: DrawMcp(); break;
-                case 6: DrawSettings(); break;
-                default: DrawLogs(); break;
+                DrawSidebar();
+                using (new EditorGUILayout.VerticalScope(GUILayout.ExpandWidth(true)))
+                {
+                    switch (_tab)
+                    {
+                        case TabChat: DrawChat(); break;
+                        case TabProject: DrawProject(); break;
+                        case TabChanges: DrawChanges(); break;
+                        case TabMcp: DrawMcp(); break;
+                        case TabSettings: DrawSettings(); break;
+                        default: DrawLogs(); break;
+                    }
+                }
             }
 
             DrawStatusBar();
+        }
+
+        void DrawSidebar()
+        {
+            var nav = new GUIStyle(EditorStyles.toolbarButton) { alignment = TextAnchor.MiddleLeft, padding = new RectOffset(12, 8, 5, 5), fixedHeight = 27f };
+            var selected = new GUIStyle(nav) { fontStyle = FontStyle.Bold };
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox, GUILayout.Width(156f), GUILayout.ExpandHeight(true)))
+            {
+                SidebarButton(TabChat, "Chat", null, nav, selected);
+                SidebarButton(TabProject, "Project", null, nav, selected);
+                SidebarButton(TabChanges, "Changes", ChangeService.PendingCount > 0 ? ChangeService.PendingCount.ToString() : null, nav, selected);
+                SidebarButton(TabMcp, "MCP", McpServer.Current != null && McpServer.Current.IsRunning ? "on" : null, nav, selected);
+                GUILayout.Space(8f);
+                SidebarButton(TabSettings, "Settings", null, nav, selected);
+                SidebarButton(TabLogs, "Logs", null, nav, selected);
+                GUILayout.FlexibleSpace();
+                if (GUILayout.Button("Documentation", EditorStyles.miniButton, GUILayout.Height(22f)))
+                    UnityAIBridgeBootstrap.OpenDocumentation();
+                GUILayout.Label("Unity AI Bridge · MIT", EditorStyles.centeredGreyMiniLabel);
+            }
+        }
+
+        void SidebarButton(int index, string label, string badge, GUIStyle normal, GUIStyle selected)
+        {
+            string text = (_tab == index ? "> " : "  ") + label + (string.IsNullOrEmpty(badge) ? string.Empty : "   [" + badge + "]");
+            if (GUILayout.Button(text, _tab == index ? selected : normal)) _tab = index;
+        }
+
+        void DrawProject()
+        {
+            _projectTab = GUILayout.Toolbar(_projectTab, ProjectTabNames, EditorStyles.toolbarButton, GUILayout.Height(22f));
+            EditorGUILayout.Space(4f);
+            if (_projectTab == 0) DrawExplorer();
+            else if (_projectTab == 1) DrawScene();
+            else DrawAssets();
         }
 
         // ---------------------------------------------------------------- header
@@ -175,9 +224,7 @@ namespace UnityAIBridge
                 }
 
                 GUILayout.Space(6f);
-                if (GUILayout.Button(ChangeService.PendingCount + " pending", EditorStyles.toolbarButton, GUILayout.Width(78f))) _tab = 4;
-                if (GUILayout.Button("Docs", EditorStyles.toolbarButton, GUILayout.Width(46f))) UnityAIBridgeBootstrap.OpenDocumentation();
-                if (GUILayout.Button("Settings", EditorStyles.toolbarButton, GUILayout.Width(62f))) _tab = 6;
+                if (GUILayout.Button(ChangeService.PendingCount + " pending", EditorStyles.toolbarButton, GUILayout.Width(78f))) _tab = TabChanges;
             }
         }
 
@@ -261,28 +308,12 @@ namespace UnityAIBridge
 
         void DrawChat()
         {
-            var settings = BridgeSettings.Current;
+            DrawProviderSummary();
 
-            using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
-            {
-                GUILayout.Label("Context:", EditorStyles.miniLabel, GUILayout.Width(48f));
-                settings.IncludeSceneContext = GUILayout.Toggle(settings.IncludeSceneContext, "Scene", EditorStyles.toolbarButton, GUILayout.Width(56f));
-                settings.IncludeConsoleContext = GUILayout.Toggle(settings.IncludeConsoleContext, "Console", EditorStyles.toolbarButton, GUILayout.Width(66f));
-                settings.IncludeFileTree = GUILayout.Toggle(settings.IncludeFileTree, "Tree", EditorStyles.toolbarButton, GUILayout.Width(46f));
-                settings.IncludeExistingScripts = GUILayout.Toggle(settings.IncludeExistingScripts, "Scripts", EditorStyles.toolbarButton, GUILayout.Width(60f));
-                GUILayout.Space(8f);
-                settings.ShowReasoning = GUILayout.Toggle(settings.ShowReasoning, "Reasoning", EditorStyles.toolbarButton, GUILayout.Width(78f));
-                GUILayout.FlexibleSpace();
-                _followOutput = GUILayout.Toggle(_followOutput, "Follow", EditorStyles.toolbarButton, GUILayout.Width(56f));
-                if (GUILayout.Button("Save", EditorStyles.toolbarButton, GUILayout.Width(46f))) BridgeSettings.Save();
-                if (GUILayout.Button("Clear chat", EditorStyles.toolbarButton, GUILayout.Width(76f)))
-                {
-                    if (EditorUtility.DisplayDialog("Clear chat", "Clear the conversation for " + ProviderFactory.DisplayName(ChatService.CurrentProviderId) + "?", "Clear", "Cancel"))
-                        ChatService.Clear();
-                }
-            }
-
-            DrawAccountBar();
+            bool configured = ProviderFactory.IsConfigured(ChatService.CurrentProviderId, out _);
+            if (!configured || ChatService.ConnectionState == ProviderConnectionState.Error || _showAccountConfig)
+                DrawAccountBar();
+            if (_showChatOptions) DrawChatOptions();
 
             if (ChatService.AttachedFiles.Count > 0)
             {
@@ -347,7 +378,7 @@ namespace UnityAIBridge
                     {
                         if (GUILayout.Button("Stop", EditorStyles.miniButton, GUILayout.Width(60f))) ChatService.Stop();
                     }
-                    if (GUILayout.Button("Quick prompts ▾", EditorStyles.miniButton, GUILayout.Width(110f)))
+                    if (GUILayout.Button("Quick prompts", EditorStyles.miniButton, GUILayout.Width(105f)))
                     {
                         var menu = new GenericMenu();
                         AddQuickPrompt(menu, "Inspect my current Unity scene.");
@@ -363,12 +394,54 @@ namespace UnityAIBridge
                     GUILayout.FlexibleSpace();
                     if (ChangeService.PendingCount > 0)
                     {
-                        if (GUILayout.Button("Review " + ChangeService.PendingCount + " change(s)", EditorStyles.miniButton, GUILayout.Width(150f))) _tab = 4;
+                        if (GUILayout.Button("Review " + ChangeService.PendingCount + " change(s)", EditorStyles.miniButton, GUILayout.Width(150f))) _tab = TabChanges;
                     }
                     if (ChatService.IsBusy)
-                    {
                         GUILayout.Label("Streaming...", EditorStyles.miniLabel, GUILayout.Width(74f));
+                }
+            }
+        }
+
+        void DrawProviderSummary()
+        {
+            using (new EditorGUILayout.HorizontalScope(EditorStyles.helpBox))
+            {
+                GUILayout.Label(ProviderFactory.DisplayName(ChatService.CurrentProviderId), EditorStyles.boldLabel, GUILayout.Width(110f));
+                if (!string.IsNullOrEmpty(ChatService.CurrentModel))
+                    GUILayout.Label(ChatService.CurrentModel, EditorStyles.miniLabel, GUILayout.Width(160f));
+                GUILayout.Label(ChatService.ConnectionState + (string.IsNullOrEmpty(ChatService.ConnectionMessage) ? string.Empty : " · " + ChatService.ConnectionMessage), EditorStyles.miniLabel);
+                GUILayout.FlexibleSpace();
+                if (GUILayout.Button(_showAccountConfig ? "Hide account" : "Account", EditorStyles.miniButton, GUILayout.Width(84f)))
+                    _showAccountConfig = !_showAccountConfig;
+                if (GUILayout.Button(_showChatOptions ? "Hide options" : "Options", EditorStyles.miniButton, GUILayout.Width(84f)))
+                    _showChatOptions = !_showChatOptions;
+            }
+        }
+
+        void DrawChatOptions()
+        {
+            var settings = BridgeSettings.Current;
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.LabelField("Context and display", EditorStyles.boldLabel);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    settings.IncludeSceneContext = GUILayout.Toggle(settings.IncludeSceneContext, "Scene", EditorStyles.miniButton, GUILayout.Width(66f));
+                    settings.IncludeConsoleContext = GUILayout.Toggle(settings.IncludeConsoleContext, "Console", EditorStyles.miniButton, GUILayout.Width(78f));
+                    settings.IncludeFileTree = GUILayout.Toggle(settings.IncludeFileTree, "Asset tree", EditorStyles.miniButton, GUILayout.Width(82f));
+                    settings.IncludeExistingScripts = GUILayout.Toggle(settings.IncludeExistingScripts, "Scripts", EditorStyles.miniButton, GUILayout.Width(70f));
+                    settings.ShowReasoning = GUILayout.Toggle(settings.ShowReasoning, "Reasoning", EditorStyles.miniButton, GUILayout.Width(84f));
+                    _followOutput = GUILayout.Toggle(_followOutput, "Follow output", EditorStyles.miniButton, GUILayout.Width(96f));
+                }
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button("Save options", EditorStyles.miniButton, GUILayout.Width(90f))) BridgeSettings.Save();
+                    if (GUILayout.Button("Clear chat", EditorStyles.miniButton, GUILayout.Width(78f)))
+                    {
+                        if (EditorUtility.DisplayDialog("Clear chat", "Clear the conversation for " + ProviderFactory.DisplayName(ChatService.CurrentProviderId) + "?", "Clear", "Cancel"))
+                            ChatService.Clear();
                     }
+                    GUILayout.Label("Attach project files from Explorer to include them explicitly.", EditorStyles.miniLabel);
                 }
             }
         }
@@ -450,7 +523,7 @@ namespace UnityAIBridge
                         if (GUILayout.Button(ChatService.IsTesting ? "Testing..." : "Test connection", EditorStyles.miniButton, GUILayout.Width(112f)))
                             ChatService.TestConnection();
                     }
-                    if (GUILayout.Button("Settings", EditorStyles.miniButton, GUILayout.Width(68f))) _tab = 6;
+                    if (GUILayout.Button("Settings", EditorStyles.miniButton, GUILayout.Width(68f))) _tab = TabSettings;
                     if (GUILayout.Button("Clear key", EditorStyles.miniButton, GUILayout.Width(70f)))
                     {
                         BridgeSettings.Secrets.DeepSeekApiKey = string.Empty;
@@ -493,7 +566,7 @@ namespace UnityAIBridge
                         if (GUILayout.Button(ChatService.IsTesting ? "Testing..." : "Test connection", EditorStyles.miniButton, GUILayout.Width(112f)))
                             ChatService.TestConnection();
                     }
-                    if (GUILayout.Button("Settings", EditorStyles.miniButton, GUILayout.Width(68f))) _tab = 6;
+                    if (GUILayout.Button("Settings", EditorStyles.miniButton, GUILayout.Width(68f))) _tab = TabSettings;
                     if (GUILayout.Button("Clear key", EditorStyles.miniButton, GUILayout.Width(70f)))
                     {
                         BridgeSettings.Secrets.OpenCodeApiKey = string.Empty;
@@ -561,7 +634,7 @@ namespace UnityAIBridge
             ChatService.SwitchProvider(BridgeSettings.ProviderOpenCode);
             ChatService.RefreshModels(true);
             ChatService.TestConnection();
-            _tab = 0;
+            _tab = TabChat;
         }
 
         void DrawOpenAiAccount()
@@ -578,7 +651,7 @@ namespace UnityAIBridge
                         if (GUILayout.Button(ChatService.IsTesting ? "Testing..." : "Test connection", EditorStyles.miniButton, GUILayout.Width(112f)))
                             ChatService.TestConnection();
                     }
-                    if (GUILayout.Button("Settings", EditorStyles.miniButton, GUILayout.Width(68f))) _tab = 6;
+                    if (GUILayout.Button("Settings", EditorStyles.miniButton, GUILayout.Width(68f))) _tab = TabSettings;
                 }
             }
             else
@@ -612,7 +685,7 @@ namespace UnityAIBridge
                     if (GUILayout.Button(ChatService.IsTesting ? "Testing..." : "Test connection", EditorStyles.miniButton, GUILayout.Width(112f)))
                         ChatService.TestConnection();
                 }
-                if (GUILayout.Button("Settings", EditorStyles.miniButton, GUILayout.Width(68f))) _tab = 6;
+                if (GUILayout.Button("Settings", EditorStyles.miniButton, GUILayout.Width(68f))) _tab = TabSettings;
             }
         }
 
@@ -652,7 +725,7 @@ namespace UnityAIBridge
                         GUILayout.Label((message.ToolName ?? "tool") + " · " + (message.ToolStatus ?? "done"), EditorStyles.miniBoldLabel);
                         if (!message.ToolOk) GUILayout.Label("failed", EditorStyles.miniLabel);
                         GUILayout.FlexibleSpace();
-                        if (message.ChangeIds.Count > 0 && GUILayout.Button("Review changes", EditorStyles.miniButton, GUILayout.Width(112f))) _tab = 4;
+                        if (message.ChangeIds.Count > 0 && GUILayout.Button("Review changes", EditorStyles.miniButton, GUILayout.Width(112f))) _tab = TabChanges;
                     }
                     if (!string.IsNullOrEmpty(message.Content))
                         GUILayout.Label(message.Content, EditorStyles.wordWrappedMiniLabel);
@@ -691,7 +764,7 @@ namespace UnityAIBridge
                     using (new EditorGUILayout.HorizontalScope())
                     {
                         GUILayout.FlexibleSpace();
-                        if (GUILayout.Button("Open Pending Changes", EditorStyles.miniButton, GUILayout.Width(150f))) _tab = 4;
+                        if (GUILayout.Button("Open Pending Changes", EditorStyles.miniButton, GUILayout.Width(150f))) _tab = TabChanges;
                     }
                 }
             }
@@ -1013,7 +1086,7 @@ namespace UnityAIBridge
                         _importSource = path;
                         string folder = string.IsNullOrEmpty(_assetFolder) ? "Assets/Art" : _assetFolder;
                         _importDest = folder.TrimEnd('/') + "/" + Path.GetFileName(path);
-                        _tab = 3;
+                        _tab = TabProject; _projectTab = 2;
                     }
                 }
                 GUILayout.FlexibleSpace();
@@ -1261,7 +1334,7 @@ namespace UnityAIBridge
                 {
                     var results = ChangeService.ApplyAllApproved();
                     SetFeedback(results.Count == 0 ? "No approved changes to apply." : string.Join("\n", results.ToArray()));
-                    _tab = 4;
+                    _tab = TabChanges;
                 }
                 if (GUILayout.Button("Clear applied", EditorStyles.toolbarButton, GUILayout.Width(90f))) ChangeService.ClearApplied();
                 if (GUILayout.Button("Open backups", EditorStyles.toolbarButton, GUILayout.Width(96f))) UnityAIBridgeBootstrap.OpenBackupsFolder();
@@ -1399,24 +1472,178 @@ namespace UnityAIBridge
         void DrawMcp()
         {
             var settings = BridgeSettings.Current;
-            bool running = McpServer.Current != null && McpServer.Current.IsRunning;
-
             using (var scroll = new EditorGUILayout.ScrollViewScope(_mcpScroll, GUILayout.ExpandHeight(true)))
             {
                 _mcpScroll = scroll.scrollPosition;
+
                 EditorGUILayout.LabelField("Local MCP server", EditorStyles.boldLabel);
+                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                {
+                    bool auto = settings.McpAutoStart;
+                    bool newAuto = EditorGUILayout.ToggleLeft("Enable MCP server and start automatically with Unity", auto);
+                    if (newAuto != auto)
+                    {
+                        settings.McpAutoStart = newAuto;
+                        settings.McpEnabled = newAuto;
+                        BridgeSettings.Save();
+                        if (newAuto)
+                        {
+                            McpServer.StartFromSettings();
+                            SetFeedback(McpServer.Current != null && McpServer.Current.IsRunning ? "MCP server started." : "MCP server failed to start (see Logs).", McpServer.Current == null);
+                        }
+                        else
+                        {
+                            McpServer.StopCurrent();
+                            SetFeedback("MCP server stopped.");
+                        }
+                    }
+
+                    bool running = McpServer.Current != null && McpServer.Current.IsRunning;
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        GUI.contentColor = running ? new Color(0.45f, 0.85f, 0.55f) : new Color(0.8f, 0.65f, 0.4f);
+                        GUILayout.Label(running ? "Running" : "Stopped", EditorStyles.boldLabel, GUILayout.Width(60f));
+                        GUI.contentColor = Color.white;
+                        GUILayout.Label(McpInstaller.ServerUrl(), EditorStyles.miniLabel);
+                        GUILayout.FlexibleSpace();
+                        if (running)
+                        {
+                            if (GUILayout.Button("Restart", EditorStyles.miniButton, GUILayout.Width(66f))) McpServer.RestartFromSettings();
+                            if (GUILayout.Button("Stop", EditorStyles.miniButton, GUILayout.Width(52f)))
+                            {
+                                settings.McpAutoStart = false;
+                                settings.McpEnabled = false;
+                                BridgeSettings.Save();
+                                McpServer.StopCurrent();
+                            }
+                        }
+                        else
+                        {
+                            if (GUILayout.Button("Start now", EditorStyles.miniButton, GUILayout.Width(72f)))
+                                McpServer.StartFromSettings();
+                        }
+                        if (GUILayout.Button("Health", EditorStyles.miniButton, GUILayout.Width(58f))) RunHealthCheck();
+                    }
+
+                    if (!string.IsNullOrEmpty(_mcpTestResult))
+                        EditorGUILayout.HelpBox(_mcpTestResult, _mcpTestResult.StartsWith("OK", StringComparison.Ordinal) ? MessageType.Info : MessageType.Warning);
+                    if (McpServer.Current != null && !string.IsNullOrEmpty(McpServer.Current.LastError))
+                        EditorGUILayout.HelpBox(McpServer.Current.LastError, MessageType.Error);
+                    if (!running)
+                        EditorGUILayout.HelpBox("Start the server before installing or using clients. The automatic checkbox is recommended.", MessageType.Warning);
+                }
+
+                EditorGUILayout.Space(10f);
+                EditorGUILayout.LabelField("Install in an MCP client", EditorStyles.boldLabel);
                 EditorGUILayout.HelpBox(
-                    "The bridge runs an MCP (JSON-RPC 2.0) server on 127.0.0.1 only. It is used by MCP clients such as Codex CLI, Claude Desktop, Cursor or MCP Inspector. " +
-                    "ChatGPT on the web cannot reach localhost directly; use Codex with this MCP server, or an officially supported tunnel (see below).",
-                    MessageType.Info);
+                    "One click merges the Unity AI Bridge entry into the selected client config. It writes the local bearer token to that file (chmod 600) and backs up the previous file. Restart the client afterwards.",
+                    MessageType.None);
 
-                EditorGUILayout.LabelField("Status", running ? "Running on " + McpServer.Current.Url : "Stopped", EditorStyles.boldLabel);
-                if (McpServer.Current != null && !string.IsNullOrEmpty(McpServer.Current.LastError))
-                    EditorGUILayout.HelpBox(McpServer.Current.LastError, MessageType.Error);
+                foreach (var client in McpInstaller.Clients()) DrawMcpClientRow(client);
 
+                EditorGUILayout.Space(8f);
+                _mcpAdvanced = EditorGUILayout.Foldout(_mcpAdvanced, "Advanced: port, token, manual config, tunnel", true);
+                if (_mcpAdvanced) DrawMcpAdvanced(settings);
+            }
+        }
+
+        void DrawMcpClientRow(McpClient client)
+        {
+            string detail;
+            var state = McpInstaller.GetState(client, out detail);
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    _mcpPortText = EditorGUILayout.TextField("Port", _mcpPortText, GUILayout.Width(140f));
+                    GUILayout.Label(client.Name, EditorStyles.boldLabel, GUILayout.Width(130f));
+                    Color color = new Color(0.65f, 0.65f, 0.65f);
+                    string stateText = "Not installed";
+                    switch (state)
+                    {
+                        case McpInstallState.Installed: color = new Color(0.45f, 0.85f, 0.55f); stateText = "Installed"; break;
+                        case McpInstallState.InstalledStale: color = new Color(0.9f, 0.78f, 0.35f); stateText = "Needs update"; break;
+                        case McpInstallState.ConfigUnreadable: color = new Color(1f, 0.5f, 0.5f); stateText = "Config unreadable"; break;
+                        case McpInstallState.Manual: color = new Color(0.65f, 0.7f, 0.8f); stateText = "Manual setup"; break;
+                    }
+                    GUI.contentColor = color;
+                    GUILayout.Label(stateText, EditorStyles.miniLabel, GUILayout.Width(96f));
+                    GUI.contentColor = Color.white;
+                    GUILayout.FlexibleSpace();
+
+                    if (client.CanInstall)
+                    {
+                        string installLabel = state == McpInstallState.Installed || state == McpInstallState.InstalledStale ? "Update" : "Install";
+                        if (GUILayout.Button(installLabel, EditorStyles.miniButton, GUILayout.Width(64f))) InstallMcpClient(client);
+                        using (new EditorGUI.DisabledScope(state != McpInstallState.Installed && state != McpInstallState.InstalledStale))
+                        {
+                            if (GUILayout.Button("Remove", EditorStyles.miniButton, GUILayout.Width(64f)))
+                            {
+                                string error = McpInstaller.Uninstall(client);
+                                SetFeedback(error ?? ("Removed from " + client.Name + "."), error != null);
+                            }
+                        }
+                        if (GUILayout.Button("Open", EditorStyles.miniButton, GUILayout.Width(50f))) OpenMcpConfig(client);
+                    }
+                    else
+                    {
+                        if (client.Id == "inspector")
+                        {
+                            if (GUILayout.Button("Copy command", EditorStyles.miniButton, GUILayout.Width(100f)))
+                                EditorGUIUtility.systemCopyBuffer = McpInstaller.InspectorCommand();
+                        }
+                        else
+                        {
+                            if (GUILayout.Button("Copy JSON", EditorStyles.miniButton, GUILayout.Width(76f)))
+                                EditorGUIUtility.systemCopyBuffer = McpServer.ClientConfigJson();
+                            if (GUILayout.Button("Open docs", EditorStyles.miniButton, GUILayout.Width(72f)))
+                                Application.OpenURL(client.DocsUrl);
+                        }
+                    }
+                }
+
+                GUILayout.Label(client.Description, EditorStyles.wordWrappedMiniLabel);
+                if (!string.IsNullOrEmpty(client.Path))
+                    GUILayout.Label(client.Path, EditorStyles.miniLabel);
+                if (!string.IsNullOrEmpty(detail)) GUILayout.Label(detail, EditorStyles.miniLabel);
+            }
+        }
+
+        void InstallMcpClient(McpClient client)
+        {
+            bool running = McpServer.Current != null && McpServer.Current.IsRunning;
+            if (!running)
+            {
+                McpServer.StartFromSettings();
+                running = McpServer.Current != null && McpServer.Current.IsRunning;
+            }
+            if (!running)
+            {
+                SetFeedback("Start the MCP server before installing a client.", true);
+                return;
+            }
+            string error = McpInstaller.Install(client);
+            SetFeedback(error ?? ("Installed in " + client.Name + ". Restart the client to connect."), error != null);
+        }
+
+        void OpenMcpConfig(McpClient client)
+        {
+            if (!string.IsNullOrEmpty(client.Path) && File.Exists(client.Path))
+                EditorUtility.OpenWithDefaultApp(client.Path);
+            else
+            {
+                string directory = string.IsNullOrEmpty(client.Path) ? null : Path.GetDirectoryName(client.Path);
+                if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+                EditorUtility.RevealInFinder(directory ?? BridgePaths.ProjectRoot);
+            }
+        }
+
+        void DrawMcpAdvanced(BridgeSettings settings)
+        {
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    _mcpPortText = EditorGUILayout.TextField("Port", _mcpPortText, GUILayout.Width(160f));
                     if (GUILayout.Button("Apply port", EditorStyles.miniButton, GUILayout.Width(90f)))
                     {
                         int port;
@@ -1427,37 +1654,11 @@ namespace UnityAIBridge
                             settings.McpPort = port;
                             BridgeSettings.Save();
                             McpServer.RestartFromSettings();
-                            SetFeedback(running ? "MCP restarted on port " + port + "." : "MCP port saved.");
+                            SetFeedback("MCP port set to " + port + ". Reinstall clients to update their URL.");
                         }
                     }
-                    if (running)
-                    {
-                        if (GUILayout.Button("Stop", GUILayout.Width(70f)))
-                        {
-                            McpServer.StopCurrent();
-                            settings.McpEnabled = false;
-                            BridgeSettings.Save();
-                            SetFeedback("MCP server stopped.");
-                        }
-                    }
-                    else
-                    {
-                        if (GUILayout.Button("Start", GUILayout.Width(70f)))
-                        {
-                            McpServer.StartFromSettings();
-                            SetFeedback(McpServer.Current != null && McpServer.Current.IsRunning ? "MCP server started." : "MCP server failed to start (see log).", McpServer.Current == null);
-                        }
-                    }
-                    if (GUILayout.Button("Health check", EditorStyles.miniButton, GUILayout.Width(100f))) RunHealthCheck();
                 }
-                if (!string.IsNullOrEmpty(_mcpTestResult)) EditorGUILayout.HelpBox(_mcpTestResult, _mcpTestResult.StartsWith("OK", StringComparison.Ordinal) ? MessageType.Info : MessageType.Warning);
 
-                settings.McpAutoStart = EditorGUILayout.Toggle("Start automatically with Unity", settings.McpAutoStart);
-                settings.McpEnabled = EditorGUILayout.Toggle("Enabled", settings.McpEnabled);
-                if (GUILayout.Button("Save", GUILayout.Width(80f))) BridgeSettings.Save();
-
-                EditorGUILayout.Space(8f);
-                EditorGUILayout.LabelField("Bearer token", EditorStyles.boldLabel);
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     string token = BridgeSettings.EnsureMcpToken();
@@ -1466,43 +1667,40 @@ namespace UnityAIBridge
                     if (GUILayout.Button("Copy", EditorStyles.miniButton, GUILayout.Width(56f))) EditorGUIUtility.systemCopyBuffer = token;
                     if (GUILayout.Button("Regenerate", EditorStyles.miniButton, GUILayout.Width(86f)))
                     {
-                        if (EditorUtility.DisplayDialog("Regenerate token", "Existing MCP clients will stop working until you update them. Continue?", "Regenerate", "Cancel"))
+                        if (EditorUtility.DisplayDialog("Regenerate token", "Installed clients will need an Update after regenerating. Continue?", "Regenerate", "Cancel"))
                         {
                             BridgeSettings.RegenerateMcpToken();
                             McpServer.RestartFromSettings();
-                            SetFeedback("New MCP token generated.");
+                            SetFeedback("New MCP token generated. Reinstall or Update clients.");
                         }
                     }
                 }
-                EditorGUILayout.HelpBox("The token is stored outside the Unity project (see Settings for the path) with 0600 permissions. It is never sent to an AI provider.", MessageType.None);
+                EditorGUILayout.HelpBox("The token is stored outside the project in secrets.json (0600) and is written into client configs only when you click Install.", MessageType.None);
 
-                EditorGUILayout.Space(8f);
-                EditorGUILayout.LabelField("Connect a client", EditorStyles.boldLabel);
-                var configStyle = new GUIStyle(EditorStyles.textArea) { wordWrap = false };
-                EditorGUILayout.TextArea(McpServer.ClientConfigJson(), configStyle, GUILayout.Height(120f));
+                EditorGUILayout.LabelField("Manual configuration", EditorStyles.boldLabel);
+                var style = new GUIStyle(EditorStyles.textArea) { wordWrap = false };
+                EditorGUILayout.TextArea(McpServer.ClientConfigJson(), style, GUILayout.Height(100f));
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    if (GUILayout.Button("Copy JSON config", GUILayout.Width(130f))) EditorGUIUtility.systemCopyBuffer = McpServer.ClientConfigJson();
-                    if (GUILayout.Button("Copy Codex command", GUILayout.Width(140f))) EditorGUIUtility.systemCopyBuffer = McpServer.CodexCommand();
+                    if (GUILayout.Button("Copy JSON", EditorStyles.miniButton, GUILayout.Width(100f))) EditorGUIUtility.systemCopyBuffer = McpServer.ClientConfigJson();
+                    if (GUILayout.Button("Copy Codex command", EditorStyles.miniButton, GUILayout.Width(140f))) EditorGUIUtility.systemCopyBuffer = McpServer.CodexCommand();
+                    if (GUILayout.Button("Copy Inspector command", EditorStyles.miniButton, GUILayout.Width(150f))) EditorGUIUtility.systemCopyBuffer = McpInstaller.InspectorCommand();
                 }
-                EditorGUILayout.HelpBox("Codex CLI (included with ChatGPT Plus plans, subject to Codex usage limits) can connect to this local server directly. It runs on your machine and uses your existing Codex/ChatGPT sign-in — no API key needed.", MessageType.None);
 
-                EditorGUILayout.Space(8f);
+                EditorGUILayout.Space(6f);
                 EditorGUILayout.LabelField("ChatGPT on the web", EditorStyles.boldLabel);
                 EditorGUILayout.HelpBox(
-                    "ChatGPT web can only connect to remote MCP servers. There is no 'Sign in with ChatGPT' developer app for an independent Unity plugin (that programme is limited to selected partners). " +
-                    "Officially supported option: OpenAI Secure MCP Tunnel — create a tunnel in Platform settings, run tunnel-client on this machine pointing at " + McpServer.Current?.Url + ", then add the tunnel as a custom MCP server in ChatGPT. " +
-                    "Availability of custom MCP servers depends on your ChatGPT plan/workspace. This panel never fakes a ChatGPT login.",
+                    "ChatGPT web cannot reach localhost. Use Codex with this local server, or an official Secure MCP Tunnel. Availability of custom MCP connectors depends on your ChatGPT plan/workspace.",
                     MessageType.Warning);
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    if (GUILayout.Button("Open Secure MCP Tunnel docs", EditorStyles.miniButton, GUILayout.Width(190f)))
+                    if (GUILayout.Button("Secure MCP Tunnel docs", EditorStyles.miniButton, GUILayout.Width(160f)))
                         Application.OpenURL("https://developers.openai.com/api/docs/guides/secure-mcp-tunnels");
-                    if (GUILayout.Button("Open custom MCP server docs", EditorStyles.miniButton, GUILayout.Width(180f)))
+                    if (GUILayout.Button("Custom MCP server docs", EditorStyles.miniButton, GUILayout.Width(160f)))
                         Application.OpenURL("https://help.openai.com/en/articles/12584461");
                 }
 
-                EditorGUILayout.Space(8f);
+                EditorGUILayout.Space(6f);
                 EditorGUILayout.LabelField("Recent calls", EditorStyles.boldLabel);
                 if (McpServer.Current == null || McpServer.Current.RecentCalls.Count == 0)
                     EditorGUILayout.LabelField("(none yet)", EditorStyles.miniLabel);

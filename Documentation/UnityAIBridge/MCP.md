@@ -99,6 +99,14 @@ curl -s "$URL" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/j
 
 The MCP registration name is now **`unity-ai-bridge`** and the Codex environment variable is **`UNITY_AI_BRIDGE_TOKEN`**. Existing client configurations keep working with their existing bearer token, but the server entry/name must be updated in the client. Re-copy the JSON config or the Codex command from the MCP tab.
 
+## One-click installation
+
+The **MCP** tab has a clean client list with an automatic-start checkbox. Click **Install** to merge the Unity AI Bridge entry into a supported client config; existing servers are preserved, the old file is backed up, and the file is written with owner-only permissions. Restart the client afterwards.
+
+Supported one-click targets: Codex CLI, OpenCode, Cursor, VS Code and Claude Code. Claude Desktop and MCP Inspector are listed with manual/copy actions because they do not expose a portable static-header configuration for this server.
+
+The top checkbox **Enable MCP server and start automatically with Unity** starts the server immediately and restarts it after domain reloads while enabled. Set the port/token in **Advanced** if you do not want the defaults. Update installed clients after changing the port or regenerating the token.
+
 ## Client configuration
 
 The MCP tab copies a ready JSON block. Generic form (Claude Desktop, Cursor, many clients):

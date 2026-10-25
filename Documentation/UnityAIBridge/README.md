@@ -16,7 +16,7 @@ It is not affiliated with, endorsed by, or sponsored by Unity Technologies, Open
 - **Ollama** local inference with streaming and tool calling where supported
 - **Permission-controlled project tools** for scripts, scenes, GameObjects, prefabs, materials, sprites, ScriptableObjects, console diagnostics and asset refresh
 - **Pending Changes** with diffs and human approval before anything is written
-- **MCP server** for compatible local clients (Codex, Claude Desktop, Cursor, MCP Inspector)
+- **MCP server** with one-click installers for Codex CLI, OpenCode, Cursor, VS Code and Claude Code; auto-start checkbox; manual setup for Claude Desktop and MCP Inspector
 - **Any Unity project**: 2D, 3D, mobile, desktop, VR and any folder layout; render-pipeline aware, with an explicit shader option for custom pipelines
 
 ## Requirements

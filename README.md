@@ -16,7 +16,7 @@ An independent, MIT-licensed Unity Editor extension that connects AI assistants 
 - **Ollama** local inference with streaming and tool calling where supported
 - 22 permission-controlled Unity tools for project inspection, scripts, scenes, GameObjects, prefabs, materials, sprites, ScriptableObjects, console diagnostics and asset refresh
 - **Pending Changes** with diffs and human approval before anything is written
-- Local **MCP server** for compatible clients (Codex, Claude Desktop, Cursor, MCP Inspector)
+- Local **MCP server** with one-click installers (Codex, OpenCode, Cursor, VS Code, Claude Code), automatic-start checkbox, and manual setup for Claude Desktop/MCP Inspector
 - Works with Unity projects: 2D, 3D, mobile, desktop, VR and any folder layout; render-pipeline aware, with an explicit shader option for custom pipelines
 - Sandboxed paths, backups, Unity Undo, GUID-preserving asset moves and secure credential storage
 
@@ -106,7 +106,7 @@ See [Setup](Documentation/UnityAIBridge/SETUP.md) and [Testing](Documentation/Un
 
 Run **Tools → Unity AI Bridge → Run Self Tests**. The suite covers file and asset operations, sandbox escapes, permissions, Undo, MCP, provider request/stream parsing, OAuth PKCE/JWT/refresh and the tool loop.
 
-The current suite has 32 tests. See [Testing](Documentation/UnityAIBridge/TESTING.md) for details and current results.
+The current suite has 35 tests. See [Testing](Documentation/UnityAIBridge/TESTING.md) for details and current results.
 
 ## Known limitations
 

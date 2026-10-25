@@ -569,7 +569,80 @@ namespace UnityAIBridge
             var openCodeTest = RunOpenCodeStreamTest();
             while (openCodeTest.MoveNext()) yield return openCodeTest.Current;
 
-            // 28. Tool loop stages a change, requires approval, then applies
+            // 28. MCP installer: JSON merge (existing servers preserved)
+            try
+            {
+                string path = Path.Combine(BridgePaths.TempDir, "mcp-install-json.json");
+                File.WriteAllText(path, "{\"mcpServers\":{\"existing\":{\"url\":\"https://example.invalid/mcp\"}}}\n");
+                var client = new McpClient { Id = "testjson", Name = "Test JSON", Kind = McpClientKind.JsonMcpServers, Path = path };
+                string installError = McpInstaller.Install(client);
+                var json = JsonValue.Parse(File.ReadAllText(path));
+                string detail;
+                var state = McpInstaller.GetState(client, out detail);
+                bool ok = string.IsNullOrEmpty(installError) &&
+                          json["mcpServers"]["existing"]["url"].AsString() == "https://example.invalid/mcp" &&
+                          json["mcpServers"][McpInstaller.ServerName]["url"].AsString() == McpInstaller.ServerUrl() &&
+                          state == McpInstallState.Installed;
+                string removeError = McpInstaller.Uninstall(client);
+                var after = JsonValue.Parse(File.ReadAllText(path));
+                bool removed = string.IsNullOrEmpty(removeError) &&
+                               after["mcpServers"][McpInstaller.ServerName].IsObject == false &&
+                               after["mcpServers"]["existing"].IsObject;
+                Check("mcp_installer_json_merge", ok && removed, installError ?? removeError ?? "merge/remove failed");
+                File.Delete(path);
+            }
+            catch (Exception e) { Check("mcp_installer_json_merge", false, e.Message); }
+
+            // 29. MCP installer: Codex TOML section merge
+            try
+            {
+                string path = Path.Combine(BridgePaths.TempDir, "mcp-install-codex.toml");
+                File.WriteAllText(path, "model = \"test\"\n\n[other]\nvalue = 1\n");
+                var client = new McpClient { Id = "testcodex", Name = "Test Codex", Kind = McpClientKind.CodexToml, Path = path };
+                string installError = McpInstaller.Install(client);
+                string text = File.ReadAllText(path);
+                string detail;
+                var state = McpInstaller.GetState(client, out detail);
+                bool ok = string.IsNullOrEmpty(installError) &&
+                          text.IndexOf("[mcp_servers.unity-ai-bridge]", StringComparison.Ordinal) >= 0 &&
+                          text.IndexOf("[other]", StringComparison.Ordinal) >= 0 &&
+                          text.IndexOf("http_headers", StringComparison.Ordinal) >= 0 &&
+                          state == McpInstallState.Installed;
+                string removeError = McpInstaller.Uninstall(client);
+                text = File.ReadAllText(path);
+                bool removed = string.IsNullOrEmpty(removeError) &&
+                               text.IndexOf("[mcp_servers.unity-ai-bridge]", StringComparison.Ordinal) < 0 &&
+                               text.IndexOf("[other]", StringComparison.Ordinal) >= 0;
+                Check("mcp_installer_codex_toml", ok && removed, installError ?? removeError ?? "toml merge/remove failed");
+                File.Delete(path);
+            }
+            catch (Exception e) { Check("mcp_installer_codex_toml", false, e.Message); }
+
+            // 30. MCP installer: OpenCode v2 mcp.servers layout
+            try
+            {
+                string path = Path.Combine(BridgePaths.TempDir, "mcp-install-opencode.json");
+                File.WriteAllText(path, "{\"mcp\":{\"servers\":{\"existing\":{\"type\":\"remote\",\"url\":\"https://example.invalid/mcp\"}}}}\n");
+                var client = new McpClient { Id = "testopencode", Name = "Test OpenCode", Kind = McpClientKind.OpenCode, Path = path };
+                string installError = McpInstaller.Install(client);
+                var json = JsonValue.Parse(File.ReadAllText(path));
+                string detail;
+                var state = McpInstaller.GetState(client, out detail);
+                bool ok = string.IsNullOrEmpty(installError) &&
+                          json["mcp"]["servers"]["existing"]["url"].AsString() == "https://example.invalid/mcp" &&
+                          json["mcp"]["servers"][McpInstaller.ServerName]["type"].AsString() == "remote" &&
+                          state == McpInstallState.Installed;
+                string removeError = McpInstaller.Uninstall(client);
+                var after = JsonValue.Parse(File.ReadAllText(path));
+                bool removed = string.IsNullOrEmpty(removeError) &&
+                               after["mcp"]["servers"][McpInstaller.ServerName].IsObject == false &&
+                               after["mcp"]["servers"]["existing"].IsObject;
+                Check("mcp_installer_opencode_v2", ok && removed, installError ?? removeError ?? "opencode merge/remove failed");
+                File.Delete(path);
+            }
+            catch (Exception e) { Check("mcp_installer_opencode_v2", false, e.Message); }
+
+            // 31. Tool loop stages a change, requires approval, then applies
             var loopTest = RunAgentToolLoopTest();
             while (loopTest.MoveNext()) yield return loopTest.Current;
 
@@ -1321,6 +1394,7 @@ namespace UnityAIBridge
             _testChangeIds.Clear();
             SafeDeleteFolder();
             AssetDatabase.Refresh();
+            ChatService.RefreshModels(true);
 
             WriteResults();
             BridgeLog.Info("tests", "Self tests finished: " + _passed + " passed, " + _failed + " failed.");

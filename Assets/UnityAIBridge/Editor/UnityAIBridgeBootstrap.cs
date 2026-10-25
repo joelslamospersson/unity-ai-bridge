@@ -45,8 +45,17 @@ namespace UnityAIBridge
         [MenuItem(MenuRoot, false, 0)]
         public static void OpenWindow()
         {
-            var window = EditorWindow.GetWindow<UnityAIBridgeWindow>("Unity AI Bridge");
-            window.minSize = new Vector2(900f, 560f);
+            var windows = Resources.FindObjectsOfTypeAll<UnityAIBridgeWindow>();
+            UnityAIBridgeWindow window = windows != null && windows.Length > 0 ? windows[0] : null;
+            if (windows != null)
+            {
+                for (int i = 1; i < windows.Length; i++)
+                {
+                    if (windows[i] != null) windows[i].Close();
+                }
+            }
+            if (window == null) window = EditorWindow.GetWindow<UnityAIBridgeWindow>("Unity AI Bridge");
+            window.minSize = new Vector2(1000f, 600f);
             window.Show();
         }
 
