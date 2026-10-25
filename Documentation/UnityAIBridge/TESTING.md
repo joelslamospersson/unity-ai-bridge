@@ -46,13 +46,13 @@ The suite pauses automatic asset refresh, uses `Assets/__UAIBTests__/`, starts l
 Unity 6000.6.7f1, Linux Editor, batch mode against a copy:
 
 ```
-35 passed, 0 failed   (~2 s of test time)
+37 passed, 0 failed   (~2 s of test time)
 ```
 
 Live Editor result after the rebranding and migration:
 
 ```
-35 passed, 0 failed   (2.72 s)
+37 passed, 0 failed   (2.87 s)
 ```
 
 | # | Test | Verifies |
@@ -90,8 +90,10 @@ Live Editor result after the rebranding and migration:
 | 31 | `mcp_installer_json_merge` | JSON client config merge/remove preserves existing servers |
 | 32 | `mcp_installer_codex_toml` | Codex TOML section merge/remove preserves existing config |
 | 33 | `mcp_installer_opencode_v2` | OpenCode `mcp.servers` merge/remove preserves existing servers |
-| 34 | `agent_tool_loop_stages_change` | Real tool loop: model → tool → result → final answer; write is staged, not applied |
-| 35 | `agent_tool_loop_apply_after_approval` | Human approval + apply writes the file correctly |
+| 34 | `mcp_catalog_stdio_json` | Catalog stdio server install/remove (Playwright) preserves existing servers |
+| 35 | `mcp_catalog_oauth_opencode` | Catalog OAuth HTTP server install/remove (GitHub) in OpenCode v2 |
+| 36 | `agent_tool_loop_stages_change` | Real tool loop: model → tool → result → final answer; write is staged, not applied |
+| 37 | `agent_tool_loop_apply_after_approval` | Human approval + apply writes the file correctly |
 
 ## Migration checks
 

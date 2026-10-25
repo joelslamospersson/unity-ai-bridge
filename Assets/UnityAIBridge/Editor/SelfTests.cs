@@ -49,6 +49,7 @@ namespace UnityAIBridge
             _testChangeIds.Clear();
             _startedAt = Time.realtimeSinceStartup;
 
+            ChatService.SuspendBackgroundWork();
             _savedAccessLevel = BridgeSettings.Current.AccessLevel;
             _savedAutoApply = BridgeSettings.Current.AutoApplyWithWriteAccess;
             AssetDatabase.DisallowAutoRefresh();
@@ -642,7 +643,52 @@ namespace UnityAIBridge
             }
             catch (Exception e) { Check("mcp_installer_opencode_v2", false, e.Message); }
 
-            // 31. Tool loop stages a change, requires approval, then applies
+            // 31. MCP catalog: install a stdio server into a JSON client
+            try
+            {
+                string path = Path.Combine(BridgePaths.TempDir, "mcp-catalog-stdio.json");
+                File.WriteAllText(path, "{\"mcpServers\":{\"existing\":{\"url\":\"https://example.invalid/mcp\"}}}\n");
+                var client = new McpClient { Id = "testcatalog", Name = "Test Catalog", Kind = McpClientKind.JsonMcpServers, Path = path };
+                var spec = new McpServerSpec { Name = "playwright", IsStdio = true, Command = "npx", Args = new[] { "-y", "@playwright/mcp@latest" } };
+                string error = McpCatalog.Install(client, spec);
+                var json = JsonValue.Parse(File.ReadAllText(path));
+                bool ok = string.IsNullOrEmpty(error) &&
+                          json["mcpServers"]["existing"].IsObject &&
+                          json["mcpServers"]["playwright"]["command"].AsString() == "npx" &&
+                          json["mcpServers"]["playwright"]["args"][1].AsString() == "@playwright/mcp@latest" &&
+                          McpCatalog.IsInstalled(client, "playwright", out _);
+                string removeError = McpCatalog.Uninstall(client, "playwright");
+                var after = JsonValue.Parse(File.ReadAllText(path));
+                bool removed = string.IsNullOrEmpty(removeError) && after["mcpServers"]["playwright"].IsObject == false && after["mcpServers"]["existing"].IsObject;
+                Check("mcp_catalog_stdio_json", ok && removed, error ?? removeError ?? "catalog stdio failed");
+                File.Delete(path);
+            }
+            catch (Exception e) { Check("mcp_catalog_stdio_json", false, e.Message); }
+
+            // 32. MCP catalog: install an OAuth HTTP server into OpenCode v2
+            try
+            {
+                string path = Path.Combine(BridgePaths.TempDir, "mcp-catalog-oauth.json");
+                File.WriteAllText(path, "{\"mcp\":{\"servers\":{\"existing\":{\"type\":\"remote\",\"url\":\"https://example.invalid/mcp\"}}}}\n");
+                var client = new McpClient { Id = "testcatalog", Name = "Test Catalog", Kind = McpClientKind.OpenCode, Path = path };
+                var spec = new McpServerSpec { Name = "github", IsStdio = false, Url = "https://api.githubcopilot.com/mcp/", OAuth = true };
+                string error = McpCatalog.Install(client, spec);
+                var json = JsonValue.Parse(File.ReadAllText(path));
+                var entry = json["mcp"]["servers"]["github"];
+                bool ok = string.IsNullOrEmpty(error) &&
+                          json["mcp"]["servers"]["existing"].IsObject &&
+                          entry["type"].AsString() == "remote" &&
+                          entry["url"].AsString() == "https://api.githubcopilot.com/mcp/" &&
+                          McpCatalog.IsInstalled(client, "github", out _);
+                string removeError = McpCatalog.Uninstall(client, "github");
+                var after = JsonValue.Parse(File.ReadAllText(path));
+                bool removed = string.IsNullOrEmpty(removeError) && after["mcp"]["servers"]["github"].IsObject == false && after["mcp"]["servers"]["existing"].IsObject;
+                Check("mcp_catalog_oauth_opencode", ok && removed, error ?? removeError ?? "catalog oauth failed");
+                File.Delete(path);
+            }
+            catch (Exception e) { Check("mcp_catalog_oauth_opencode", false, e.Message); }
+
+            // 33. Tool loop stages a change, requires approval, then applies
             var loopTest = RunAgentToolLoopTest();
             while (loopTest.MoveNext()) yield return loopTest.Current;
 
@@ -1394,7 +1440,7 @@ namespace UnityAIBridge
             _testChangeIds.Clear();
             SafeDeleteFolder();
             AssetDatabase.Refresh();
-            ChatService.RefreshModels(true);
+            ChatService.ResumeBackgroundWork();
 
             WriteResults();
             BridgeLog.Info("tests", "Self tests finished: " + _passed + " passed, " + _failed + " failed.");

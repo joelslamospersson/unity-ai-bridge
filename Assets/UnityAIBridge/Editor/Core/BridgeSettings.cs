@@ -241,6 +241,8 @@ namespace UnityAIBridge
         public string OpenAiApiKey = "";
         public string DeepSeekApiKey = "";
         public string OpenCodeApiKey = "";
+        public string Context7ApiKey = "";
+        public string GitHubMcpToken = "";
         public string McpToken = "";
         public string OllamaApiKey = "";
 

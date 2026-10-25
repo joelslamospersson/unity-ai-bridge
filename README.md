@@ -8,7 +8,7 @@ An independent, MIT-licensed Unity Editor extension that connects AI assistants 
 
 ## Features
 
-- Native streaming chat window: **Tools → Unity AI Bridge**
+- Native streaming chat window: **Tools → Unity AI Bridge**, with a windowed history that renders only recent messages and loads older ones as you scroll up
 - **ChatGPT** via Sign in with ChatGPT (OAuth + PKCE, ChatGPT plan usage)
 - **DeepSeek** API with model discovery, reasoning, streaming tool calls, usage and estimated cost
 - **OpenCode Go** with OpenAI-compatible chat completions, model discovery and tool calling
@@ -17,6 +17,7 @@ An independent, MIT-licensed Unity Editor extension that connects AI assistants 
 - 22 permission-controlled Unity tools for project inspection, scripts, scenes, GameObjects, prefabs, materials, sprites, ScriptableObjects, console diagnostics and asset refresh
 - **Pending Changes** with diffs and human approval before anything is written
 - Local **MCP server** with one-click installers (Codex, OpenCode, Cursor, VS Code, Claude Code), automatic-start checkbox, and manual setup for Claude Desktop/MCP Inspector
+- **MCP catalog** for Context7, GitHub, MCP for Unity (Coplay), MCP for Blender and Playwright, with API-key/OAuth setup
 - Works with Unity projects: 2D, 3D, mobile, desktop, VR and any folder layout; render-pipeline aware, with an explicit shader option for custom pipelines
 - Sandboxed paths, backups, Unity Undo, GUID-preserving asset moves and secure credential storage
 
@@ -106,7 +107,7 @@ See [Setup](Documentation/UnityAIBridge/SETUP.md) and [Testing](Documentation/Un
 
 Run **Tools → Unity AI Bridge → Run Self Tests**. The suite covers file and asset operations, sandbox escapes, permissions, Undo, MCP, provider request/stream parsing, OAuth PKCE/JWT/refresh and the tool loop.
 
-The current suite has 35 tests. See [Testing](Documentation/UnityAIBridge/TESTING.md) for details and current results.
+The current suite has 37 tests. See [Testing](Documentation/UnityAIBridge/TESTING.md) for details and current results.
 
 ## Known limitations
 

@@ -107,6 +107,20 @@ Supported one-click targets: Codex CLI, OpenCode, Cursor, VS Code and Claude Cod
 
 The top checkbox **Enable MCP server and start automatically with Unity** starts the server immediately and restarts it after domain reloads while enabled. Set the port/token in **Advanced** if you do not want the defaults. Update installed clients after changing the port or regenerating the token.
 
+## Other MCP servers
+
+The MCP tab also has an **Add other MCP servers** section. Pick a target client and install:
+
+| Server | Transport | Auth |
+| --- | --- | --- |
+| Context7 | HTTP `https://mcp.context7.com/mcp` | Anonymous, optional API key (`Context7-API-Key`), or OAuth (`/mcp/oauth`) |
+| GitHub | HTTP `https://api.githubcopilot.com/mcp/` | OAuth (leave token empty) or a GitHub PAT |
+| MCP for Unity (Coplay) | HTTP `http://localhost:8080/mcp` | None; requires the CoplayDev package running in this project |
+| MCP for Blender | stdio `uvx mcp-for-blender` | None; requires uv and the Blender add-on |
+| Playwright | stdio `npx -y @playwright/mcp@latest` | None; requires Node.js |
+
+API keys/PATs entered here are stored in the bridge's 0600 secrets file and are only written to the selected client config when you click Install. Existing servers are preserved, files are backed up, and configs are chmod 600. Restart the client after installing. OAuth servers (Context7 `/mcp/oauth` and GitHub with no token) require the client to complete its own sign-in flow.
+
 ## Client configuration
 
 The MCP tab copies a ready JSON block. Generic form (Claude Desktop, Cursor, many clients):

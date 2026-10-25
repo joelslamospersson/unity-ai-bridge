@@ -53,6 +53,7 @@ namespace UnityAIBridge
         static bool _flushScheduled;
         static int _runSerial;
         static CancellationTokenSource _cancellation;
+        static CancellationTokenSource _modelCancellation;
         static bool _chatGptSubscribed;
         static List<ModelInfo> _models = new List<ModelInfo>();
         static bool _loadingModels;
@@ -60,6 +61,7 @@ namespace UnityAIBridge
         static bool _testing;
 
         public static bool IsBusy { get; private set; }
+        public static bool Suspended { get; private set; }
         public static string StatusMessage { get; private set; }
         public static string LastError { get; private set; }
         public static ProviderConnectionState ConnectionState { get; private set; }
@@ -84,6 +86,20 @@ namespace UnityAIBridge
         public static ChatSessionData CurrentSession { get { return GetSession(CurrentProviderId); } }
         public static string CurrentModel { get { return CurrentSession.Model; } }
         public static List<ChatMessage> Messages { get { return CurrentSession.Display; } }
+
+        public static void SuspendBackgroundWork()
+        {
+            Suspended = true;
+            try { if (_modelCancellation != null) _modelCancellation.Cancel(); } catch { }
+            _loadingModels = false;
+        }
+
+        public static void ResumeBackgroundWork()
+        {
+            Suspended = false;
+            _loadingModels = false;
+            RefreshModels(true);
+        }
 
         public static void Raise()
         {
@@ -163,10 +179,10 @@ namespace UnityAIBridge
             try
             {
                 var session = GetSession(provider);
-                if (session.Display.Count > 200)
-                    session.Display.RemoveRange(0, session.Display.Count - 200);
-                if (session.Transcript.Count > 200)
-                    session.Transcript.RemoveRange(0, session.Transcript.Count - 200);
+                if (session.Display.Count > 600)
+                    session.Display.RemoveRange(0, session.Display.Count - 600);
+                if (session.Transcript.Count > 300)
+                    session.Transcript.RemoveRange(0, session.Transcript.Count - 300);
                 BridgePaths.EnsureDirectory(BridgePaths.ProjectConfigDir);
                 string path = BridgePaths.ChatSessionFile(provider);
                 string temp = path + ".tmp";
@@ -246,7 +262,7 @@ namespace UnityAIBridge
 
         public static void RefreshModels(bool force)
         {
-            if (_loadingModels) return;
+            if (Suspended || _loadingModels) return;
             string providerId = CurrentProviderId;
             var provider = ProviderFactory.Create(providerId);
             if (provider == null)
@@ -283,12 +299,14 @@ namespace UnityAIBridge
             _loadingModels = true;
             ConnectionMessage = "Loading models...";
             string fingerprint = ProviderFingerprint(providerId);
+            _modelCancellation = new CancellationTokenSource();
+            var modelToken = _modelCancellation.Token;
             Raise();
             Task.Run(async () =>
             {
                 try
                 {
-                    var list = await provider.GetModelsAsync(CancellationToken.None).ConfigureAwait(false);
+                    var list = await provider.GetModelsAsync(modelToken).ConfigureAwait(false);
                     MainThread.Run(() =>
                     {
                         _loadingModels = false;
@@ -306,6 +324,10 @@ namespace UnityAIBridge
                         BridgeLog.Info("chat", "Loaded " + _models.Count + " model(s) for " + providerId + ".");
                         Raise();
                     });
+                }
+                catch (OperationCanceledException)
+                {
+                    MainThread.Run(() => { _loadingModels = false; Raise(); });
                 }
                 catch (Exception e)
                 {

@@ -11,6 +11,8 @@
 - Added OpenCode Go provider support (OpenAI-compatible chat completions, model discovery, required session header).
 - Redesigned the Editor window with a compact sidebar, grouped Project tabs, simpler chat options and an MCP dashboard.
 - Added one-click MCP client installers (Codex, OpenCode, Cursor, VS Code, Claude Code), backups and automatic MCP start/stop.
+- Added an MCP server catalog: Context7, GitHub, MCP for Unity (Coplay), MCP for Blender and Playwright, with API-key/OAuth setup.
+- Added windowed chat history rendering with scroll-up loading, reducing Editor lag on long conversations.
 - Added privacy cleanup across documentation, tests, examples and UI strings.
 
 ## 1.0.0

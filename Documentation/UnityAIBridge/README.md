@@ -8,7 +8,7 @@ It is not affiliated with, endorsed by, or sponsored by Unity Technologies, Open
 
 ## Highlights
 
-- **Live streaming chat** inside a native Unity Editor window
+- **Live streaming chat** inside a native Unity Editor window with a windowed/virtualized history: only the recent messages render, scroll up to load older messages smoothly
 - **ChatGPT** via Sign in with ChatGPT (OAuth + PKCE, ChatGPT plan usage)
 - **DeepSeek** API with model discovery, reasoning, streaming tool calls, usage and estimated cost
 - **OpenCode Go** with OpenAI-compatible chat completions, model discovery and tool calling
@@ -17,6 +17,7 @@ It is not affiliated with, endorsed by, or sponsored by Unity Technologies, Open
 - **Permission-controlled project tools** for scripts, scenes, GameObjects, prefabs, materials, sprites, ScriptableObjects, console diagnostics and asset refresh
 - **Pending Changes** with diffs and human approval before anything is written
 - **MCP server** with one-click installers for Codex CLI, OpenCode, Cursor, VS Code and Claude Code; auto-start checkbox; manual setup for Claude Desktop and MCP Inspector
+- **MCP catalog** for Context7, GitHub, MCP for Unity (Coplay), MCP for Blender and Playwright, with optional API-key/OAuth setup
 - **Any Unity project**: 2D, 3D, mobile, desktop, VR and any folder layout; render-pipeline aware, with an explicit shader option for custom pipelines
 
 ## Requirements
