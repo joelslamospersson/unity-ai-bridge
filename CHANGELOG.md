@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.1.0
+
+- Replaced the chat transcript with a UI Toolkit `ListView` using dynamic item heights; added a conversation sidebar with search, new chat, rename, delete and clear history.
+- Added paged on-disk history (50 messages per page), lazy older-page loading, crash-recovery checkpoints and one-time migration of legacy `chat-<provider>.json` sessions.
+- Added a separate capped model context (120 messages) with recent-turn selection and a local older-context summary, plus cached project context and tool-based file reads.
+- Throttled streaming UI updates to roughly 10–15 FPS and avoided rebuilding the transcript for each token.
+- Added response modes (Concise/Balanced/Detailed), a separate output-token setting, Markdown with syntax-highlighted code blocks, structured file cards and compact tool groups.
+- Added history, context, Markdown, UI-shell, activity/file-card and 100/500/1000-message load benchmarks to the self-test suite (44 tests total).
+- Documented the UI Toolkit shell, legacy tabs and remaining UI automation limitations.
+
 ## 2.0.0
 
 - Rebranded as **Unity AI Bridge** and removed project-specific content and terminology.
