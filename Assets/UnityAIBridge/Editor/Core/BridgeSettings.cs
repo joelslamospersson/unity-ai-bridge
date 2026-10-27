@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -15,6 +16,9 @@ namespace UnityAIBridge
         public const string ProviderOpenCode = "opencode";
         public const string ProviderOpenAi = "openai";
         public const string ProviderOllama = "ollama";
+        public const string ProviderClaude = "claude";
+        public const string ProviderClaudeSubscription = "claude-subscription";
+        public const string ProviderGemini = "gemini";
 
         public const int AccessReadOnly = 0;
         public const int AccessAsk = 1;
@@ -30,6 +34,16 @@ namespace UnityAIBridge
         public string OpenAiBaseUrl = "https://api.openai.com/v1";
         public string OpenAiModel = "gpt-5.2";
         public string OpenAiApiStyle = "responses";
+        public string ClaudeBaseUrl = "https://api.anthropic.com/v1";
+        public string ClaudeModel = "";
+        public string ClaudeModelsJson = "";
+        public bool ClaudeThinking = false;
+        public string ClaudeEffort = "medium";
+        public string GeminiBaseUrl = "https://generativelanguage.googleapis.com/v1beta";
+        public string GeminiModel = "";
+        public string GeminiModelsJson = "";
+        public bool GeminiThinking = true;
+        public string ClaudeExecutable = "claude";
 
         public string DeepSeekBaseUrl = "https://api.deepseek.com";
         public string DeepSeekModel = "deepseek-flash";
@@ -41,12 +55,15 @@ namespace UnityAIBridge
         public int DeepSeekMaxTokens = 16384;
 
         public string ChatGptModel = "";
+        public bool ChatGptPlanWelcomeShown = false;
+        public string ChatMode = "agent"; // chat: no tools, plan: inspect, agent: project tools
+        public string OpenAiReasoningEffort = "medium";
 
         public double Temperature = 0.2;
-        public int MaxOutputTokens = 2000;
+        public int MaxOutputTokens = 8192;
         public string ResponseMode = "concise";
         public int RequestTimeoutSeconds = 300;
-        public int MaxAgentSteps = 8;
+        public int MaxAgentSteps = 16;
         public bool ShowReasoning = true;
 
         public string DeepSeekModelsJson = "";
@@ -64,6 +81,8 @@ namespace UnityAIBridge
         public bool McpEnabled = false;
         public bool McpAutoStart = false;
         public int McpPort = 7777;
+        public List<string> McpTargetClients = new List<string> { "codex", "opencode" };
+        public bool Context7OAuth = false;
 
         public bool AllowSelfModification = false;
         public bool LogToFile = true;
@@ -159,7 +178,7 @@ namespace UnityAIBridge
         {
             if (string.IsNullOrEmpty(Provider) || Provider == ProviderManual) Provider = ProviderDeepSeek;
             if (Provider != ProviderChatGpt && Provider != ProviderDeepSeek && Provider != ProviderOpenCode &&
-                Provider != ProviderOpenAi && Provider != ProviderOllama)
+                Provider != ProviderOpenAi && Provider != ProviderOllama && Provider != ProviderClaude && Provider != ProviderClaudeSubscription && Provider != ProviderGemini)
                 Provider = ProviderDeepSeek;
             if (string.IsNullOrEmpty(DeepSeekBaseUrl)) DeepSeekBaseUrl = "https://api.deepseek.com";
             if (string.IsNullOrEmpty(DeepSeekModel)) DeepSeekModel = "deepseek-flash";
@@ -169,6 +188,9 @@ namespace UnityAIBridge
             if (DeepSeekMaxTokens < 256) DeepSeekMaxTokens = 16384;
             if (string.IsNullOrEmpty(OpenAiBaseUrl)) OpenAiBaseUrl = "https://api.openai.com/v1";
             if (string.IsNullOrEmpty(OpenAiModel)) OpenAiModel = "gpt-5.2";
+            if (string.IsNullOrEmpty(ClaudeBaseUrl)) ClaudeBaseUrl = "https://api.anthropic.com/v1";
+            if (string.IsNullOrEmpty(GeminiBaseUrl)) GeminiBaseUrl = "https://generativelanguage.googleapis.com/v1beta";
+            if (string.IsNullOrEmpty(ClaudeExecutable)) ClaudeExecutable = "claude";
             if (string.IsNullOrEmpty(OllamaUrl)) OllamaUrl = "http://127.0.0.1:11434";
             if (string.IsNullOrEmpty(OllamaModel)) OllamaModel = "llama3.1";
             if (MaxContextCharacters < 1000) MaxContextCharacters = 60000;
@@ -178,6 +200,7 @@ namespace UnityAIBridge
             if (string.IsNullOrEmpty(ResponseMode) || (ResponseMode != "concise" && ResponseMode != "balanced" && ResponseMode != "detailed")) ResponseMode = "concise";
             AccessLevel = Mathf.Clamp(AccessLevel, 0, 2);
             McpPort = Mathf.Clamp(McpPort <= 0 ? 7777 : McpPort, 1024, 65535);
+            if (McpTargetClients == null) McpTargetClients = new List<string> { "codex", "opencode" };
         }
 
         public AccessMode Level { get { return (AccessMode)Mathf.Clamp(AccessLevel, 0, 2); } }
@@ -247,6 +270,8 @@ namespace UnityAIBridge
         public string GitHubMcpToken = "";
         public string McpToken = "";
         public string OllamaApiKey = "";
+        public string ClaudeApiKey = "";
+        public string GeminiApiKey = "";
 
         public string ChatGptAccessToken = "";
         public string ChatGptRefreshToken = "";

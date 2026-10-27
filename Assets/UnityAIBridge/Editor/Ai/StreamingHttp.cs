@@ -76,19 +76,26 @@ namespace UnityAIBridge
 
                         using (var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
                         using (var reader = new System.IO.StreamReader(stream, Encoding.UTF8))
+                        using (linked.Token.Register(() => { try { stream.Dispose(); } catch { } }))
                         {
                             var data = new StringBuilder();
                             while (true)
                             {
                                 cancellationToken.ThrowIfCancellationRequested();
+                                if (linked.IsCancellationRequested) throw new BridgeException("The provider stream timed out.");
                                 string line;
                                 try { line = await reader.ReadLineAsync().ConfigureAwait(false); }
-                                catch (OperationCanceledException)
+                                catch (Exception) when (linked.IsCancellationRequested)
                                 {
-                                    if (cancellationToken.IsCancellationRequested) throw;
+                                    cancellationToken.ThrowIfCancellationRequested();
                                     throw new BridgeException("The provider stream timed out.");
                                 }
-                                if (line == null) break;
+                                if (line == null)
+                                {
+                                    cancellationToken.ThrowIfCancellationRequested();
+                                    if (linked.IsCancellationRequested) throw new BridgeException("The provider stream timed out.");
+                                    break;
+                                }
 
                                 if (!sse)
                                 {

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.2.0
+
+- Added native Claude API and Gemini API providers with private API-key storage, Save & test, paginated account model discovery, streaming text/thinking, native function tools and usage reporting. Signed thinking and function-call data survive tool-result replay; blocked or incomplete responses surface as failures.
+- Added a Claude subscription handoff to the official Claude Code client: browser sign-in, launch controls and Unity MCP setup. Subscription credentials remain with that client; native Unity replies use Claude API.
+- Tool groups now start collapsed and preserve the user's expansion choice during streaming. Full output remains available when opened.
+- Fixed clipped live transcript rows, thinking summaries and tool outputs; retained paged history and throttled updates.
+- Added conversation-scoped Auto accept all, inline Accept/Deny/Comment review, durable approval checkpoints and continuation after script reload.
+- Added shared MCP client selection, Save & apply / Clear & apply credentials and configuration sync between Codex, OpenCode and other supported clients, preserving unrelated settings and reporting unsupported translations.
+- Updated direct ChatGPT plan login, callback/refresh recovery, chat-model selection, consent confirmation and usage-limit reporting. No Codex process or automatic API-billing fallback is used.
+- Expanded prefab inspection/reuse, bounded file reads, tool-result handling and agent recovery; added Chat/Plan/Agent modes and provider-specific reasoning controls.
+- Validated in an isolated Unity 6000.6.7f1 project: 152 self-tests passed, 0 failed; rendered streaming layout passed. Claude/Gemini inference uses localhost protocol mocks; official Claude Code login/launch remains a real-client check.
+
 ## 2.1.0
 
 - Replaced the chat transcript with a UI Toolkit `ListView` using dynamic item heights; added a conversation sidebar with search, new chat, rename, delete and clear history.

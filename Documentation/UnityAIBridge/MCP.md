@@ -99,9 +99,13 @@ curl -s "$URL" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/j
 
 The MCP registration name is now **`unity-ai-bridge`** and the Codex environment variable is **`UNITY_AI_BRIDGE_TOKEN`**. Existing client configurations keep working with their existing bearer token, but the server entry/name must be updated in the client. Re-copy the JSON config or the Codex command from the MCP tab.
 
+## Use your ChatGPT Plus subscription in Unity
+
+The MCP tab's **ChatGPT Plus / Pro** card opens **Continue with ChatGPT**. Sign in, allow plan usage, and return to the Unity chat. The bridge uses the account's OAuth token directly for eligible subscription requests; external MCP client installation is a separate action. You can also start this login directly from Chat or Settings. See [subscription login](SETUP.md#chatgpt-plus--pro-subscription-login).
+
 ## One-click installation
 
-The **MCP** tab has a clean client list with an automatic-start checkbox. Click **Install** to merge the Unity AI Bridge entry into a supported client config; existing servers are preserved, the old file is backed up, and the file is written with owner-only permissions. Restart the client afterwards.
+The **MCP** tab has a shared client selection. Check every client that should receive MCP servers and keys, then use **Install / update Unity Bridge in selected clients**. Individual Install/Update buttons remain available for a single client. The selection is saved, with Codex and OpenCode selected by default. Existing servers are preserved, previous configs are backed up, and changed files are written atomically with owner-only permissions. Restart the affected clients afterwards.
 
 Supported one-click targets: Codex CLI, OpenCode, Cursor, VS Code and Claude Code. Claude Desktop and MCP Inspector are listed with manual/copy actions because they do not expose a portable static-header configuration for this server.
 
@@ -109,17 +113,25 @@ The top checkbox **Enable MCP server and start automatically with Unity** starts
 
 ## Other MCP servers
 
-The MCP tab also has an **Add other MCP servers** section. Pick a target client and install:
+The MCP tab also has an **Add other MCP servers** section. **Install / update selected** installs a server in every checked client using the shared selection above:
 
 | Server | Transport | Auth |
 | --- | --- | --- |
-| Context7 | HTTP `https://mcp.context7.com/mcp` | Anonymous, optional API key (`Context7-API-Key`), or OAuth (`/mcp/oauth`) |
+| Context7 | HTTP `https://mcp.context7.com/mcp` | Anonymous, optional API key (`Authorization: Bearer …`), or OAuth (`/mcp/oauth`) |
 | GitHub | HTTP `https://api.githubcopilot.com/mcp/` | OAuth (leave token empty) or a GitHub PAT |
 | MCP for Unity (Coplay) | HTTP `http://localhost:8080/mcp` | None; requires the CoplayDev package running in this project |
 | MCP for Blender | stdio `uvx mcp-for-blender` | None; requires uv and the Blender add-on |
 | Playwright | stdio `npx -y @playwright/mcp@latest` | None; requires Node.js |
 
-API keys/PATs entered here are stored in the bridge's 0600 secrets file and are only written to the selected client config when you click Install. Existing servers are preserved, files are backed up, and configs are chmod 600. Restart the client after installing. OAuth servers (Context7 `/mcp/oauth` and GitHub with no token) require the client to complete its own sign-in flow.
+Keys are masked while typing and marked **Unsaved key** until applied. **Save & apply** stores the key in the bridge's private secrets file and immediately installs or updates the server in every checked client. **Clear & apply** removes the saved key and updates those configurations to use the selected anonymous/OAuth setup. Context7's OAuth choice is saved as well. Results appear at the top of the MCP tab, including per-client failures; a saved key is retained even when one destination could not be updated. Changing the selection does not alter other clients. Restart the affected clients to use updated credentials.
+
+## Sync existing installations
+
+Choose **Sync from** (for example, Codex CLI), check the destination clients, then press **Sync to selected clients**. The source is excluded automatically. Sync merges all source MCP server entries into each selected destination, updating matching server names and preserving unrelated destination servers and settings. It translates HTTP URLs/headers, static keys, environment-based credential references, stdio commands/arguments/environment, supported working-directory settings, enabled state and timeouts. Codex startup/tool timeouts map to OpenCode's single timeout with a visible note. Imported Context7/GitHub credentials also populate the shared key store for later Save & apply actions.
+
+Sync reads Codex MCP TOML tables (including quoted names, nested env/header tables and multiline argument arrays), OpenCode direct and `mcp.servers` layouts, and supported JSON client maps. JSONC comments and trailing commas are accepted for OpenCode and VS Code; updates reformat these files as JSON, with the original backed up. OpenCode's existing `.jsonc` file is used when no `.json` file exists. Unsupported client-specific settings are reported rather than silently discarded. Invalid source configs abort before any destination writes; invalid destinations are preserved and reported while other selected destinations can succeed.
+
+OAuth session tokens are not copied between applications. Servers configured for OAuth require sign-in in each destination client. This follows [OpenCode's MCP authentication flow](https://opencode.ai/docs/mcp-servers/#oauth). Context7's current bearer-header format follows its [MCP client setup guide](https://context7.com/docs/resources/all-clients).
 
 ## Client configuration
 

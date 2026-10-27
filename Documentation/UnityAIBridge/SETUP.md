@@ -58,14 +58,14 @@ If you previously pasted an OpenCode Go key into the **DeepSeek** provider, it w
 
 Some OpenCode Go models use a Responses endpoint (for example GPT/Grok entries) and are not available through this chat-completions provider. Web search/model catalogs can change; the model dropdown reflects the live `/models` response.
 
-## ChatGPT (Sign in with ChatGPT)
+## ChatGPT Plus / Pro (subscription login)
 
-Unity AI Bridge uses OpenAI's official **open-source Sign in with ChatGPT** flow. It performs OAuth 2.0 Authorization Code + PKCE with a local loopback callback and validates the OIDC ID token against OpenAI's JWKS. It does not use browser cookies, scraping, or unofficial endpoints.
+Eligible Plus and Pro subscribers can use their ChatGPT plan directly in Unity AI Bridge, without installing Codex or supplying an OpenAI API key. Unity AI Bridge uses OpenAI's official **open-source Sign in with ChatGPT** flow. It performs OAuth 2.0 Authorization Code + PKCE with a local loopback callback and validates the OIDC ID token against OpenAI's JWKS. It does not use browser cookies, scraping, or unofficial endpoints.
 
 ### Flow
 
-1. Provider: **ChatGPT**.
-2. Press **Continue with ChatGPT**.
+1. Choose **ChatGPT Plus / Pro**, or press **Continue with ChatGPT** in Chat, MCP, or Settings. The button selects the ChatGPT subscription provider automatically.
+2. Sign in with your ChatGPT account, select its workspace, and allow Unity AI Bridge to use your ChatGPT plan. You return through the local callback to Unity chat. Press **Continue with ChatGPT** directly above the conversation to begin. Use **Open sign-in page** if the browser needs to be reopened, or **Cancel sign-in** to cancel the attempt.
 3. The extension:
    - starts a callback listener on `http://127.0.0.1:1455/auth/callback` (ports 1455–1465 are tried),
    - generates fresh `state`, OIDC `nonce`, and PKCE verifier/challenge,
@@ -78,15 +78,23 @@ Unity AI Bridge uses OpenAI's official **open-source Sign in with ChatGPT** flow
      - `code_challenge_method=S256`.
 4. OpenAI redirects to the loopback callback with `code`, `state` and the issued `client_id`.
 5. The extension validates `state`, exchanges the code at `https://auth.openai.com/api/accounts/oauth/token`, and validates the ID token signature, issuer, audience, expiry and nonce.
-6. It checks for `chatgpt.tokens.use.direct`. If the scope is missing, you are signed in but **not connected** for inference; the UI says plan usage was not granted.
+6. It checks for `chatgpt.tokens.use.direct`. The browser only displays **ChatGPT connected** after tokens and identity are verified and plan permission is present. Unity focuses the chat and shows **Using ChatGPT plan**, a one-time dismissible confirmation, and **Manage usage**. If the scope is missing, you are signed in but **not connected** for inference; choose **Enable plan usage** to reopen consent.
 7. Models are loaded from `GET https://api.openai.com/v1/models` using the OAuth token. The dropdown reflects the account.
 8. Chat uses `POST https://api.openai.com/v1/responses` with `store:false`, `stream:true`, tools via an `additional_tools` input item, and no unsupported fields (`temperature`, `max_output_tokens`, etc. are omitted on this route).
+
+### Chat models and conversation history
+
+This provider calls OpenAI directly using the bridge's own chat and Unity tool loop. It does not start Codex. Its model picker excludes Codex-labelled models from both fresh account catalogs and cached catalogs. When choosing an initial/default model, it prefers an available GPT-6 chat model; it never invents access to a model absent from the account's model list. Other exposed chat models remain selectable.
+
+Sign in with ChatGPT grants eligible plan inference and account identity, **not access to existing ChatGPT conversations or other account context**. Conversation history in this provider belongs to Unity AI Bridge. Existing ChatGPT website conversations are not synchronized by signing in. See the [official plan-usage overview](https://developers.openai.com/siwc/token-sharing-open-source).
+
+The **Codex** row in the MCP tab configures the external Codex client. It is separate from this direct ChatGPT provider.
 
 ### Tokens, renewal and sign-out
 
 - Access tokens last one hour; refresh tokens last 30 days and rotate on refresh.
-- Refresh is automatic near expiry and serialized.
-- **Sign out** revokes the renewable session through the OIDC discovery `revocation_endpoint` when reachable and clears local tokens. The issued client ID is retained for a later sign-in.
+- Refresh is automatic near expiry and serialized. A 401 forces renewal even when the saved expiry is still in the future. Temporary server errors preserve the saved session; invalid credentials require sign-in again.
+- **Sign out** clears local tokens immediately, prevents an in-flight refresh from restoring them, and revokes the renewable session through the OIDC discovery `revocation_endpoint` when reachable. The issued client ID is retained for a later sign-in.
 - **Reconnect** reuses the client ID and an `id_token_hint`.
 - Tokens are stored in `secrets.json` (0600) and are never written to chat logs or sent anywhere except `auth.openai.com` / `api.openai.com`.
 
@@ -94,7 +102,7 @@ Unity AI Bridge uses OpenAI's official **open-source Sign in with ChatGPT** flow
 
 - This flow is for **open-source clients**. Eligibility is controlled by OpenAI and may depend on account, workspace or region. The UI reports those errors; it never fakes a connection.
 - **ChatGPT plan usage is not unlimited API access.** Plus usage shares a 5-hour limit across apps using the ChatGPT plan; Pro has no 5-hour limit. Users can review limits at <https://chatgpt.com/settings/usage>.
-- This does not consume Codex Work quotas; Codex is a separate client.
+- The bridge does not start a Codex process. That implementation detail does not guarantee that OpenAI meters an independent allowance. OpenAI controls shared plan and per-app limits; inspect ChatGPT usage settings for the limits that apply to the account. See [accounts and usage](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions).
 - If plan usage is unavailable, use **OpenAI API** with a platform key (separate billing) or another provider.
 - Existing installations keep their issued OAuth client ID, tokens and account mapping. The new agent name is used for **new** registrations. An existing ChatGPT registration may continue to display its original name until you disconnect/reconnect the app or update it in ChatGPT settings. Signing out is not required for the upgrade.
 
@@ -128,7 +136,7 @@ Provider: **Ollama**.
 
 ## Model selection
 
-- The toolbar dropdown is populated from the provider's model list.
+- The toolbar dropdown is populated from the provider's model list. Empty lists are reported as errors, and older requests cannot overwrite results after switching connections.
 - The selection is saved per provider and per project.
 - **Refresh** reloads models; if the current model disappears, the first available model is used.
 - ChatGPT models require a successful sign-in with plan usage granted.
@@ -160,3 +168,37 @@ Reset bridge settings/secrets with **Tools → Unity AI Bridge → Reset Setting
 - DeepSeek/OpenAI/ChatGPT request building, streaming parsing, tool-call assembly and the tool loop are verified against local mock HTTP servers.
 - PKCE, authorization URL parameters, ID-token signature/nonce/audience validation and refresh-token exchange are verified locally.
 - A real ChatGPT sign-in, real DeepSeek inference, real OpenAI API inference, and real Ollama inference require your credentials/accounts and are not claimed as pre-tested.
+
+## Chat and reasoning controls
+
+Use Chat, Plan, or Agent beside the composer. Chat offers no tools; Plan offers inspection tools; Agent offers project tools subject to the selected permissions. Tool calls outside the selected mode are rejected by the runner.
+
+ChatGPT/OpenAI reasoning is configured independently of the DeepSeek settings and sent through the Responses API's `reasoning` field. Summaries and encrypted reasoning items are retained for stateless tool continuations. The plan usage route still omits unsupported parameters, including `temperature` and `max_output_tokens`.
+
+A model list verifies catalog access. A reply is successful only after the Responses `response.completed` event; truncated streams and provider failures remain errors even if some text arrived. Browser consent and live model access depend on your signed-in account.
+
+
+## Claude API
+
+Choose **Claude API**, then open **Account & settings**. Enter an API key from the [Anthropic Console](https://platform.claude.com/settings/keys) and press **Save & test**. This saves the masked key outside the project and retrieves the account's paginated model catalog. Choose a discovered model in Chat. **Clear key** removes the saved API key. The default API base URL is `https://api.anthropic.com/v1`.
+
+Claude API supports streaming text, thinking when enabled for a compatible model, native function tools and usage counts. Signed thinking blocks and tool-use IDs are retained for tool-result continuations. **Off** disables optional thinking; Low/Medium/High selects effort on adaptive-thinking models and enables budgeted thinking on older supported models. Model availability and thinking support are controlled by Anthropic. API usage is billed separately from Claude Pro/Max subscriptions. See the official [Messages streaming contract](https://platform.claude.com/docs/en/build-with-claude/streaming).
+
+## Claude subscription (external)
+
+Anthropic's [third-party integration guidance](https://code.claude.com/docs/en/agent-sdk/overview) requires prior approval for third-party Claude.ai subscription login. This bridge therefore offers a handoff to the **official Claude Code client**, rather than importing its subscription tokens into native Unity chat.
+
+1. [Install Claude Code](https://code.claude.com/docs/en/quickstart). Set **Claude executable** in Account & settings if `claude` is not on the Unity Editor's PATH.
+2. Choose **Claude subscription (external)** and press **Sign in to Claude Code**. The official CLI runs `claude auth login` and owns the browser sign-in and credential storage. If browser sign-in needs a pasted code, complete `claude auth login` in a terminal.
+3. Press **Install Unity Bridge for Claude Code** to start the local MCP server and add it to Claude Code's project configuration.
+4. Press **Open Claude Code** to work in the official client with its subscription and Unity MCP tools. Linux requires a supported terminal emulator; on macOS, run the copied `claude` command in the opened Terminal.
+
+The Unity chat composer is disabled for this external provider. Use **Claude API** for streamed replies inside Unity. The handoff does not translate subscription tokens into API credentials, and it removes inherited API/cloud billing environment overrides from the processes it starts. Subscription eligibility and limits follow the official client's account and policy. See [Claude Code authentication](https://code.claude.com/docs/en/authentication).
+
+## Gemini API
+
+Choose **Gemini API**, then open **Account & settings**. Get a key from [Google AI Studio](https://aistudio.google.com/apikey), paste it in the masked field, and press **Save & test**. Select a discovered generation model in Chat. The default base URL is `https://generativelanguage.googleapis.com/v1beta`. Keys are sent in the `x-goog-api-key` header, not in the request URL.
+
+Gemini supports streaming text, thought summaries on compatible models, native function tools and usage counts. Thought signatures and function-call IDs are preserved when returning tool results. **Default** leaves thought-summary behavior to the model; **Summaries** requests them on supported Gemini models. API usage follows Google API billing and quotas, separately from Gemini app subscriptions. See the official [Gemini generation API](https://ai.google.dev/api/generate-content).
+
+Claude and Gemini models are discovered from each account; no model or entitlement is invented when discovery fails. The automated tests use localhost fixtures. Live authentication/inference and the external Claude Code handoff require the user's installed client and accounts and have not been exercised in this run.

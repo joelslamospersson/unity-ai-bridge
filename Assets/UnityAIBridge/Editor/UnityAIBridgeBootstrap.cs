@@ -17,6 +17,13 @@ namespace UnityAIBridge
             BridgeSettings.Load();
 
             AssemblyReloadEvents.beforeAssemblyReload += McpServer.StopForReload;
+            AssemblyReloadEvents.beforeAssemblyReload += ChatGptAuth.CancelSignIn;
+            AssemblyReloadEvents.beforeAssemblyReload += ChatService.PrepareForReload;
+            EditorApplication.quitting += ChatGptAuth.CancelSignIn;
+            EditorApplication.quitting += ChatService.Stop;
+            EditorApplication.quitting += ClaudeSubscriptionHandoff.CancelLogin;
+            AssemblyReloadEvents.beforeAssemblyReload += ClaudeSubscriptionHandoff.CancelLogin;
+            ChatGptAuth.SignInCompleted += ReturnToChatAfterSignIn;
             AssemblyReloadEvents.afterAssemblyReload += OnAfterAssemblyReload;
             EditorApplication.delayCall += OnEditorLoaded;
         }
@@ -28,9 +35,19 @@ namespace UnityAIBridge
                 McpServer.StartFromSettings();
         }
 
+        static void ReturnToChatAfterSignIn()
+        {
+            if (Application.isBatchMode || ChatService.Suspended || ChatService.IsBusy) return;
+            ChatService.SwitchProvider(BridgeSettings.ProviderChatGpt);
+            OpenWindow();
+            var windows = Resources.FindObjectsOfTypeAll<UnityAIBridgeWindow>();
+            if (windows.Length > 0) windows[0].ShowChatAfterSignIn();
+        }
+
         static void OnEditorLoaded()
         {
             BridgePaths.EnsureMigrated();
+            EditorApplication.delayCall += ChatService.ResumeAfterReload;
 
             if (BridgeSettings.Current.McpEnabled && BridgeSettings.Current.McpAutoStart && McpServer.Current == null)
                 McpServer.StartFromSettings();

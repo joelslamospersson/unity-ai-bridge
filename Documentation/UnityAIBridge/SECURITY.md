@@ -96,3 +96,8 @@ Approving a `.cs` change triggers a clear warning: Unity compiles the script and
 4. Use **Pending Changes → Restore backup**, or `git diff` / `git checkout` for tracked files.
 5. Review `~/.config/unity-ai-bridge/<project-id>/bridge.log` for the action history.
 6. Delete `~/.config/unity-ai-bridge/<project-id>/` to remove keys, history and pending changes (backups stay in the project).
+
+
+## Additional provider credentials
+
+Claude API and Gemini API keys use the same private, outside-project secrets store as other provider keys. They are sent as authentication headers. The Claude subscription handoff starts the official Claude Code CLI; the bridge does not read its subscription credentials or use them for native API requests. CLI output is discarded rather than recording authorization data in bridge logs. New provider protocol tests use synthetic local credentials only.

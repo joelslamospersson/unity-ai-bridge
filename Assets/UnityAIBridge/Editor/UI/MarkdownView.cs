@@ -88,7 +88,7 @@ namespace UnityAIBridge
 
         static Label Paragraph(string text, bool pro)
         {
-            var label = Text(Inline(text), 12, false, pro);
+            var label = Text(Inline(text), 13, false, pro);
             label.style.whiteSpace = WhiteSpace.Normal;
             label.style.marginBottom = 6;
             label.enableRichText = true;
@@ -101,6 +101,7 @@ namespace UnityAIBridge
             label.style.fontSize = size;
             label.style.whiteSpace = WhiteSpace.Normal;
             label.style.color = pro ? new Color(0.86f, 0.86f, 0.86f) : new Color(0.12f, 0.12f, 0.12f);
+            label.selection.isSelectable = true;
             if (bold) label.style.unityFontStyleAndWeight = FontStyle.Bold;
             return label;
         }
@@ -113,7 +114,7 @@ namespace UnityAIBridge
             bullet.style.unityTextAlign = TextAnchor.MiddleRight;
             bullet.style.color = pro ? new Color(0.6f, 0.6f, 0.6f) : new Color(0.4f, 0.4f, 0.4f);
             row.Add(bullet);
-            var label = Text(Inline(text), 12, false, pro);
+            var label = Text(Inline(text), 13, false, pro);
             label.style.flexGrow = 1;
             label.style.marginLeft = 6;
             label.enableRichText = true;
@@ -129,7 +130,7 @@ namespace UnityAIBridge
             bar.style.marginRight = 8;
             bar.style.backgroundColor = pro ? new Color(0.4f, 0.55f, 0.7f) : new Color(0.45f, 0.6f, 0.8f);
             row.Add(bar);
-            var label = Text(Inline(text), 12, false, pro);
+            var label = Text(Inline(text), 13, false, pro);
             label.style.flexGrow = 1;
             label.style.color = pro ? new Color(0.72f, 0.75f, 0.78f) : new Color(0.32f, 0.36f, 0.4f);
             label.style.unityFontStyleAndWeight = FontStyle.Italic;
@@ -163,17 +164,48 @@ namespace UnityAIBridge
             box.style.paddingLeft = 10; box.style.paddingRight = 10; box.style.paddingTop = 8; box.style.paddingBottom = 8;
             box.style.marginTop = 4; box.style.marginBottom = 8;
 
+            var header = new VisualElement();
+            header.style.flexDirection = FlexDirection.Row;
+            header.style.alignItems = Align.Center;
+            header.style.marginBottom = 4;
+
             if (!string.IsNullOrEmpty(block.Language))
             {
                 var lang = new Label(block.Language.ToUpperInvariant());
                 lang.style.fontSize = 9;
                 lang.style.color = pro ? new Color(0.55f, 0.55f, 0.55f) : new Color(0.45f, 0.45f, 0.45f);
-                lang.style.marginBottom = 4;
-                box.Add(lang);
+                header.Add(lang);
             }
+
+            var spacer = new VisualElement();
+            spacer.style.flexGrow = 1;
+            header.Add(spacer);
+
+            var copy = new Button();
+            copy.text = "Copy";
+            copy.tooltip = "Copy code";
+            copy.style.fontSize = 9;
+            copy.style.paddingLeft = 6;
+            copy.style.paddingRight = 6;
+            copy.style.paddingTop = 2;
+            copy.style.paddingBottom = 2;
+            copy.style.backgroundColor = pro ? new Color(0.18f, 0.18f, 0.19f) : new Color(0.9f, 0.9f, 0.91f);
+            copy.style.color = pro ? new Color(0.68f, 0.7f, 0.74f) : new Color(0.3f, 0.33f, 0.37f);
+            copy.clicked += () =>
+            {
+                EditorGUIUtility.systemCopyBuffer = block.Text;
+                copy.text = "Copied";
+                copy.schedule.Execute(() =>
+                {
+                    if (copy.panel != null) copy.text = "Copy";
+                }).StartingIn(1000);
+            };
+            header.Add(copy);
+            box.Add(header);
 
             var code = new Label(block.Highlighted ?? Escape(block.Text));
             code.enableRichText = true;
+            code.selection.isSelectable = true;
             code.style.whiteSpace = WhiteSpace.PreWrap;
             code.style.fontSize = 11;
             code.style.color = pro ? new Color(0.84f, 0.84f, 0.84f) : new Color(0.12f, 0.12f, 0.12f);

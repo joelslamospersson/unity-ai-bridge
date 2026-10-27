@@ -31,6 +31,7 @@ namespace UnityAIBridge
         public const string ApiResource = "https://api.openai.com/v1";
         public const string AgentName = "Unity AI Bridge";
         public const string PlanScope = "chatgpt.tokens.use.direct";
+        public const string UsageUrl = "https://chatgpt.com/settings/usage";
         const string RequestedScope = "openid profile email offline_access resource.invoke " + PlanScope;
 
         public static string AuthBaseUrl = DefaultAuthBaseUrl;
@@ -39,8 +40,12 @@ namespace UnityAIBridge
         static readonly SemaphoreSlim RefreshGate = new SemaphoreSlim(1, 1);
         static CancellationTokenSource _signInCancellation;
         static HttpListener _signInListener;
+        public static string PendingAuthorizationUrl { get; private set; }
         static string _jwksJson;
+        static string _jwksAuthBaseUrl;
         static DateTime _jwksFetchedUtc;
+        static int _sessionVersion;
+        static readonly object CredentialsLock = new object();
 
         public static ChatGptStatus Status { get; private set; }
         public static string LastError { get; private set; }
@@ -48,13 +53,15 @@ namespace UnityAIBridge
         public static bool PlanUsageEnabled { get; private set; }
 
         public static event Action Changed;
+        public static event Action SignInCompleted;
+        internal static Action<string> OpenBrowser = url => Application.OpenURL(url);
 
         static ChatGptAuth()
         {
             Reload();
         }
 
-        public static bool IsBusy { get { return Status == ChatGptStatus.SigningIn; } }
+        public static bool IsBusy { get { return _signInCancellation != null || Status == ChatGptStatus.SigningIn; } }
 
         public static bool HasTokens
         {
@@ -93,28 +100,40 @@ namespace UnityAIBridge
         public static void StartSignIn(bool forceConsent = false)
         {
             if (IsBusy) return;
+            Interlocked.Increment(ref _sessionVersion);
             Status = ChatGptStatus.SigningIn;
             LastError = null;
             Notify();
-            _signInCancellation = new CancellationTokenSource();
-            var token = _signInCancellation.Token;
-            Task.Run(() => SignInAsync(forceConsent, token));
+            var attempt = new CancellationTokenSource();
+            _signInCancellation = attempt;
+            Task.Run(() => SignInAsync(forceConsent, attempt));
         }
 
         public static void CancelSignIn()
         {
+            if (_signInCancellation == null) return;
             try { if (_signInCancellation != null) _signInCancellation.Cancel(); } catch { }
-            try { if (_signInListener != null) _signInListener.Close(); } catch { }
+            // Keep this attempt busy until its finally block releases the listener.
+            // A replacement attempt must never share or close the old callback listener.
+            PendingAuthorizationUrl = null;
+            Status = ChatGptStatus.SigningIn;
+            Notify();
+        }
+
+        static void RestoreStatusAfterCancel()
+        {
             Status = HasTokens ? (PlanUsageEnabled ? ChatGptStatus.SignedIn : ChatGptStatus.PlanUsageUnavailable) : ChatGptStatus.NotSignedIn;
             LastError = null;
             Notify();
         }
 
-        static async Task SignInAsync(bool forceConsent, CancellationToken cancellationToken)
+        static async Task SignInAsync(bool forceConsent, CancellationTokenSource attempt)
         {
+            var cancellationToken = attempt.Token;
             string authBase = AuthBaseUrl;
-            string apiBase = ApiBaseUrl;
             int port = 0;
+            HttpListenerResponse browserResponse = null;
+            bool verified = false;
             try
             {
                 EnsureHostId();
@@ -135,10 +154,12 @@ namespace UnityAIBridge
                     isNew ? null : secrets.ChatGptEmail,
                     forceConsent, isNew);
 
+                PendingAuthorizationUrl = authorizationUrl;
+                Notify();
                 // Never log this URL: it may contain id_token_hint.
-                MainThread.Invoke(() => Application.OpenURL(authorizationUrl), 15000);
+                MainThread.Invoke(() => OpenBrowser(authorizationUrl), 15000);
 
-                var callback = await WaitForCallback(state, cancellationToken).ConfigureAwait(false);
+                var callback = await WaitForCallbackAsync(_signInListener, state, cancellationToken, response => browserResponse = response).ConfigureAwait(false);
                 string code = callback[0];
                 string callbackClientId = callback[1];
 
@@ -151,6 +172,11 @@ namespace UnityAIBridge
                     : secrets.ChatGptClientId;
                 if (string.IsNullOrEmpty(issuedClientId) || issuedClientId == "dynamic_agent_client")
                     throw new BridgeException("ChatGPT did not return an issued client ID, so registration is incomplete.");
+
+                cancellationToken.ThrowIfCancellationRequested();
+                // Registration survives a failed token exchange; retry with the issued ID.
+                secrets.ChatGptClientId = issuedClientId;
+                BridgeSettings.SaveSecrets();
 
                 var fields = new Dictionary<string, string>
                 {
@@ -177,30 +203,43 @@ namespace UnityAIBridge
                 if (!ValidateIdToken(idToken, jwks, nonce, issuedClientId, authBase, out validationError, out email, out subject))
                     throw new BridgeException("ChatGPT sign-in could not be verified: " + validationError);
 
-                secrets.ChatGptAccessToken = accessToken;
-                secrets.ChatGptRefreshToken = refreshToken;
-                secrets.ChatGptIdToken = idToken;
-                secrets.ChatGptClientId = issuedClientId;
-                secrets.ChatGptEmail = email ?? string.Empty;
-                secrets.ChatGptSubject = subject ?? string.Empty;
-                secrets.ChatGptScopes = scope ?? string.Empty;
-                secrets.ChatGptTokenType = tokenResponse["token_type"].AsString("Bearer");
-                secrets.ChatGptExpiresAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + expiresIn;
-                secrets.ChatGptPlanUsageEnabled = HasScope(scope, PlanScope);
-                BridgeSettings.SaveSecrets();
+                lock (CredentialsLock)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!isNew && !string.IsNullOrEmpty(secrets.ChatGptSubject) &&
+                        !string.Equals(secrets.ChatGptSubject, subject, StringComparison.Ordinal))
+                        throw new BridgeException("ChatGPT returned a different account for this registration. Sign out before switching accounts.");
 
-                PlanUsageEnabled = secrets.ChatGptPlanUsageEnabled;
-                AccountLabel = string.IsNullOrEmpty(email) ? "ChatGPT account" : email;
-                if (PlanUsageEnabled)
-                {
-                    Status = ChatGptStatus.SignedIn;
-                    LastError = null;
+                    secrets.ChatGptAccessToken = accessToken;
+                    secrets.ChatGptRefreshToken = refreshToken;
+                    secrets.ChatGptIdToken = idToken;
+                    secrets.ChatGptClientId = issuedClientId;
+                    secrets.ChatGptEmail = email ?? string.Empty;
+                    secrets.ChatGptSubject = subject ?? string.Empty;
+                    secrets.ChatGptScopes = scope ?? string.Empty;
+                    secrets.ChatGptTokenType = tokenResponse["token_type"].AsString("Bearer");
+                    secrets.ChatGptExpiresAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + expiresIn;
+                    secrets.ChatGptPlanUsageEnabled = HasScope(scope, PlanScope);
+                    BridgeSettings.SaveSecrets();
+
+                    PlanUsageEnabled = secrets.ChatGptPlanUsageEnabled;
+                    AccountLabel = string.IsNullOrEmpty(email) ? "ChatGPT account" : email;
+                    if (PlanUsageEnabled)
+                    {
+                        Status = ChatGptStatus.SignedIn;
+                        LastError = null;
+                    }
+                    else
+                    {
+                        Status = ChatGptStatus.PlanUsageUnavailable;
+                        LastError = "ChatGPT plan usage was not granted. Reconnect and allow the app to use your ChatGPT plan, or use the OpenAI API provider instead.";
+                    }
                 }
-                else
-                {
-                    Status = ChatGptStatus.PlanUsageUnavailable;
-                    LastError = "ChatGPT plan usage was not granted. Reconnect and allow the app to use your ChatGPT plan, or use the OpenAI API provider instead.";
-                }
+                verified = true;
+                WriteBrowserPage(browserResponse, PlanUsageEnabled, PlanUsageEnabled
+                    ? "ChatGPT connected. Unity AI Bridge is using your ChatGPT plan. You can close this tab and return to Unity."
+                    : "You are signed in, but plan usage was not allowed. Return to Unity and choose Enable plan usage to continue.");
+                browserResponse = null;
                 BridgeLog.Success("chatgpt", "Signed in with ChatGPT as " + AccountLabel + " (plan usage " + (PlanUsageEnabled ? "enabled" : "not granted") + ").");
                 Notify();
             }
@@ -208,7 +247,13 @@ namespace UnityAIBridge
             {
                 var bridge = e as BridgeException;
                 string message = bridge != null ? bridge.Message : e.Message;
-                if (cancellationToken.IsCancellationRequested) message = "Sign-in cancelled.";
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    RestoreStatusAfterCancel();
+                    return;
+                }
+                message = FileService.RedactSecrets(message);
+                if (browserResponse != null) { WriteBrowserPage(browserResponse, false, "ChatGPT could not be connected. " + message); browserResponse = null; }
                 LastError = message;
                 Status = HasTokens ? (PlanUsageEnabled ? ChatGptStatus.SignedIn : ChatGptStatus.PlanUsageUnavailable) : ChatGptStatus.Error;
                 BridgeLog.Warn("chatgpt", "Sign-in failed: " + message);
@@ -216,9 +261,13 @@ namespace UnityAIBridge
             }
             finally
             {
+                if (browserResponse != null) WriteBrowserPage(browserResponse, false, "ChatGPT sign-in was cancelled. Return to Unity to try again.");
                 StopListener();
-                try { if (_signInCancellation != null) _signInCancellation.Dispose(); } catch { }
-                _signInCancellation = null;
+                PendingAuthorizationUrl = null;
+                if (ReferenceEquals(_signInCancellation, attempt)) _signInCancellation = null;
+                attempt.Dispose();
+                Notify();
+                if (verified) MainThread.Run(() => { var handler = SignInCompleted; if (handler != null) handler(); });
             }
         }
 
@@ -249,84 +298,99 @@ namespace UnityAIBridge
             _signInListener = null;
         }
 
-        static async Task<string[]> WaitForCallback(string expectedState, CancellationToken cancellationToken)
+        internal static async Task<string[]> WaitForCallbackAsync(HttpListener listener, string expectedState, CancellationToken cancellationToken, Action<HttpListenerResponse> onAuthorized = null)
         {
-            var deadline = DateTime.UtcNow.AddMinutes(5);
-            while (DateTime.UtcNow < deadline)
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                HttpListenerContext context;
-                try
+                timeout.CancelAfter(TimeSpan.FromMinutes(5));
+                using (timeout.Token.Register(() => { try { listener.Close(); } catch { } }))
+                while (true)
                 {
-                    var getContext = _signInListener.GetContextAsync();
-                    var completed = await Task.WhenAny(getContext, Task.Delay(1000, cancellationToken)).ConfigureAwait(false);
-                    if (completed != getContext) continue;
-                    context = getContext.Result;
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception e)
-                {
-                    throw new BridgeException("The ChatGPT callback listener stopped: " + e.Message);
-                }
+                    cancellationToken.ThrowIfCancellationRequested();
+                    HttpListenerContext context;
+                    try
+                    {
+                        // Exactly one accept stays pending while the user completes browser login.
+                        context = await listener.GetContextAsync().ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception e)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (timeout.IsCancellationRequested) throw new BridgeException("ChatGPT sign-in timed out after 5 minutes.");
+                        throw new BridgeException("The ChatGPT callback listener stopped: " + e.Message);
+                    }
 
-                var request = context.Request;
-                var response = context.Response;
-                string path = request.Url != null ? request.Url.AbsolutePath : "/";
-                if (path != "/auth/callback")
-                {
-                    response.StatusCode = 404;
-                    response.Close();
-                    continue;
-                }
+                    var request = context.Request;
+                    var response = context.Response;
+                    string path = request.Url != null ? request.Url.AbsolutePath : "/";
+                    if (path != "/auth/callback")
+                    {
+                        response.StatusCode = 404;
+                        response.Close();
+                        continue;
+                    }
 
-                var query = ParseQuery(request.Url != null ? request.Url.Query : string.Empty);
-                string state;
-                string error;
-                query.TryGetValue("state", out state);
-                query.TryGetValue("error", out error);
+                    var query = ParseQuery(request.Url != null ? request.Url.Query : string.Empty);
+                    string state;
+                    string error;
+                    query.TryGetValue("state", out state);
+                    query.TryGetValue("error", out error);
 
-                if (!string.Equals(state, expectedState, StringComparison.Ordinal))
-                {
-                    WriteBrowserPage(response, false, "The sign-in response did not match this request. Please try again.");
-                    throw new BridgeException("ChatGPT sign-in state mismatch. The attempt was rejected.");
-                }
-                if (!string.IsNullOrEmpty(error))
-                {
-                    string description;
-                    query.TryGetValue("error_description", out description);
-                    WriteBrowserPage(response, false, description ?? error);
-                    throw new BridgeException("ChatGPT sign-in was denied: " + (string.IsNullOrEmpty(description) ? error : description));
-                }
+                    if (!string.Equals(state, expectedState, StringComparison.Ordinal))
+                    {
+                        WriteBrowserPage(response, false, "The sign-in response did not match this request. Please try again.");
+                        // Ignore stale browser tabs without destroying the active attempt.
+                        continue;
+                    }
+                    if (!string.IsNullOrEmpty(error))
+                    {
+                        string description;
+                        query.TryGetValue("error_description", out description);
+                        WriteBrowserPage(response, false, description ?? error);
+                        throw new BridgeException("ChatGPT sign-in was denied: " + (string.IsNullOrEmpty(description) ? error : description));
+                    }
 
-                string code;
-                string clientId;
-                query.TryGetValue("code", out code);
-                query.TryGetValue("client_id", out clientId);
-                if (string.IsNullOrEmpty(code))
-                {
-                    WriteBrowserPage(response, false, "No authorization code was returned.");
-                    throw new BridgeException("ChatGPT sign-in did not return an authorization code.");
-                }
+                    string code;
+                    string clientId;
+                    query.TryGetValue("code", out code);
+                    query.TryGetValue("client_id", out clientId);
+                    if (string.IsNullOrEmpty(code))
+                    {
+                        WriteBrowserPage(response, false, "No authorization code was returned.");
+                        throw new BridgeException("ChatGPT sign-in did not return an authorization code.");
+                    }
 
-                WriteBrowserPage(response, true, "Signed in. You can close this window and return to Unity.");
-                return new[] { code, clientId ?? string.Empty };
+                    // The actual sign-in response stays open until token exchange
+                    // and ID validation finish. Never display success prematurely.
+                    if (onAuthorized != null) onAuthorized(response);
+                    else WriteBrowserPage(response, true, "Authorization received. Return to Unity to finish verifying your account.");
+                    return new[] { code, clientId ?? string.Empty };
+                }
             }
-            throw new BridgeException("ChatGPT sign-in timed out after 5 minutes.");
         }
 
         static void WriteBrowserPage(HttpListenerResponse response, bool success, string message)
         {
+            if (response == null) return;
             string html = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Unity AI Bridge</title>" +
                           "<style>body{font-family:system-ui,sans-serif;background:#111;color:#eee;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}" +
                           ".card{max-width:520px;padding:28px;border-radius:14px;background:#1b1b1b;border:1px solid #333}" +
                           "h1{font-size:20px;margin:0 0 10px}p{color:" + (success ? "#9fe8b0" : "#ff9b9b") + ";line-height:1.5}</style></head>" +
                           "<body><div class=\"card\"><h1>Unity AI Bridge</h1><p>" + WebUtility.HtmlEncode(message) + "</p></div></body></html>";
             byte[] bytes = Encoding.UTF8.GetBytes(html);
-            response.StatusCode = 200;
-            response.ContentType = "text/html; charset=utf-8";
-            response.ContentLength64 = bytes.Length;
-            try { response.OutputStream.Write(bytes, 0, bytes.Length); } catch { }
-            response.Close();
+            try
+            {
+                response.StatusCode = 200;
+                response.ContentType = "text/html; charset=utf-8";
+                response.ContentLength64 = bytes.Length;
+                response.Headers["Cache-Control"] = "no-store";
+                response.Headers["Referrer-Policy"] = "no-referrer";
+                response.Headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'";
+                response.OutputStream.Write(bytes, 0, bytes.Length);
+                response.Close();
+            }
+            catch { try { response.Close(); } catch { } }
         }
 
         static Dictionary<string, string> ParseQuery(string query)
@@ -338,7 +402,7 @@ namespace UnityAIBridge
             {
                 int equals = pair.IndexOf('=');
                 if (equals < 0) result[Uri.UnescapeDataString(pair)] = string.Empty;
-                else result[Uri.UnescapeDataString(pair.Substring(0, equals))] = Uri.UnescapeDataString(pair.Substring(equals + 1));
+                else result[Uri.UnescapeDataString(pair.Substring(0, equals))] = Uri.UnescapeDataString(pair.Substring(equals + 1).Replace("+", " "));
             }
             return result;
         }
@@ -376,22 +440,26 @@ namespace UnityAIBridge
                 return secrets.ChatGptAccessToken;
             if (string.IsNullOrEmpty(secrets.ChatGptRefreshToken))
                 throw new BridgeException("Not signed in with ChatGPT. Press 'Continue with ChatGPT'.");
-            return await RefreshAsync(cancellationToken).ConfigureAwait(false);
+            return await RefreshAsync(cancellationToken, null).ConfigureAwait(false);
         }
 
         public static async Task<string> ForceRefreshAsync(CancellationToken cancellationToken)
         {
-            return await RefreshAsync(cancellationToken).ConfigureAwait(false);
+            string rejectedAccessToken = BridgeSettings.Secrets.ChatGptAccessToken;
+            return await RefreshAsync(cancellationToken, rejectedAccessToken).ConfigureAwait(false);
         }
 
-        static async Task<string> RefreshAsync(CancellationToken cancellationToken)
+        static async Task<string> RefreshAsync(CancellationToken cancellationToken, string rejectedAccessToken)
         {
+            int version = Volatile.Read(ref _sessionVersion);
             await RefreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
+                if (version != Volatile.Read(ref _sessionVersion)) throw new OperationCanceledException("ChatGPT account changed.");
                 var secrets = BridgeSettings.Secrets;
                 long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                if (!string.IsNullOrEmpty(secrets.ChatGptAccessToken) && secrets.ChatGptExpiresAtUnix > now + 120)
+                if (!string.IsNullOrEmpty(secrets.ChatGptAccessToken) && secrets.ChatGptExpiresAtUnix > now + 120 &&
+                    (rejectedAccessToken == null || secrets.ChatGptAccessToken != rejectedAccessToken))
                     return secrets.ChatGptAccessToken;
                 if (string.IsNullOrEmpty(secrets.ChatGptRefreshToken))
                     throw new BridgeException("ChatGPT session has no refresh token. Please sign in again.");
@@ -411,8 +479,12 @@ namespace UnityAIBridge
                 }
                 catch (HttpStatusException e)
                 {
+                    if (version != Volatile.Read(ref _sessionVersion)) throw new OperationCanceledException("ChatGPT account changed.");
                     string code = ExtractOAuthError(e.Body);
-                    ClearTokensAfterFailure();
+                    if ((e.StatusCode == 400 && (code == "invalid_grant" || code == "invalid_client")) || e.StatusCode == 401)
+                        ClearTokensAfterFailure();
+                    else
+                        throw new BridgeException("ChatGPT token renewal is temporarily unavailable. Retry shortly; your saved session has been kept.", e);
                     throw new BridgeException("ChatGPT session expired and could not be refreshed (" + (string.IsNullOrEmpty(code) ? e.Message : code) + "). Please sign in again.");
                 }
 
@@ -423,15 +495,20 @@ namespace UnityAIBridge
                 if (string.IsNullOrEmpty(access) || string.IsNullOrEmpty(refresh))
                     throw new BridgeException("ChatGPT refresh did not return new tokens. Please sign in again.");
 
-                secrets.ChatGptAccessToken = access;
-                secrets.ChatGptRefreshToken = refresh;
-                secrets.ChatGptScopes = scope;
-                secrets.ChatGptExpiresAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + expiresIn;
-                secrets.ChatGptPlanUsageEnabled = HasScope(scope, PlanScope);
-                BridgeSettings.SaveSecrets();
+                lock (CredentialsLock)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (version != Volatile.Read(ref _sessionVersion)) throw new OperationCanceledException("ChatGPT account changed.");
+                    secrets.ChatGptAccessToken = access;
+                    secrets.ChatGptRefreshToken = refresh;
+                    secrets.ChatGptScopes = scope;
+                    secrets.ChatGptExpiresAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + expiresIn;
+                    secrets.ChatGptPlanUsageEnabled = HasScope(scope, PlanScope);
+                    BridgeSettings.SaveSecrets();
 
-                PlanUsageEnabled = secrets.ChatGptPlanUsageEnabled;
-                Status = PlanUsageEnabled ? ChatGptStatus.SignedIn : ChatGptStatus.PlanUsageUnavailable;
+                    PlanUsageEnabled = secrets.ChatGptPlanUsageEnabled;
+                    Status = PlanUsageEnabled ? ChatGptStatus.SignedIn : ChatGptStatus.PlanUsageUnavailable;
+                }
                 Notify();
                 return access;
             }
@@ -461,6 +538,29 @@ namespace UnityAIBridge
             var secrets = BridgeSettings.Secrets;
             string refreshToken = secrets.ChatGptRefreshToken;
             string clientId = secrets.ChatGptClientId;
+            lock (CredentialsLock)
+            {
+                Interlocked.Increment(ref _sessionVersion);
+                CancelSignIn();
+                secrets.ChatGptAccessToken = string.Empty;
+                secrets.ChatGptRefreshToken = string.Empty;
+                secrets.ChatGptIdToken = string.Empty;
+                secrets.ChatGptEmail = string.Empty;
+                secrets.ChatGptSubject = string.Empty;
+                secrets.ChatGptScopes = string.Empty;
+                secrets.ChatGptExpiresAtUnix = 0;
+                secrets.ChatGptPlanUsageEnabled = false;
+                BridgeSettings.SaveSecrets();
+                BridgeSettings.Current.ChatGptModelsJson = string.Empty;
+                BridgeSettings.Save();
+
+                PlanUsageEnabled = false;
+                AccountLabel = "ChatGPT account";
+                Status = string.IsNullOrEmpty(secrets.ChatGptClientId) ? ChatGptStatus.NotSignedIn : ChatGptStatus.SignedOut;
+                LastError = null;
+                BridgeLog.Info("chatgpt", "Signed out of ChatGPT.");
+            }
+            Notify();
             if (!string.IsNullOrEmpty(refreshToken))
             {
                 try
@@ -480,24 +580,6 @@ namespace UnityAIBridge
                 catch { }
             }
 
-            secrets.ChatGptAccessToken = string.Empty;
-            secrets.ChatGptRefreshToken = string.Empty;
-            secrets.ChatGptIdToken = string.Empty;
-            secrets.ChatGptEmail = string.Empty;
-            secrets.ChatGptSubject = string.Empty;
-            secrets.ChatGptScopes = string.Empty;
-            secrets.ChatGptExpiresAtUnix = 0;
-            secrets.ChatGptPlanUsageEnabled = false;
-            BridgeSettings.SaveSecrets();
-            BridgeSettings.Current.ChatGptModelsJson = string.Empty;
-            BridgeSettings.Save();
-
-            PlanUsageEnabled = false;
-            AccountLabel = "ChatGPT account";
-            Status = string.IsNullOrEmpty(secrets.ChatGptClientId) ? ChatGptStatus.NotSignedIn : ChatGptStatus.SignedOut;
-            LastError = null;
-            BridgeLog.Info("chatgpt", "Signed out of ChatGPT.");
-            Notify();
         }
 
         public static async Task<JsonValue> GetModelsAsync(CancellationToken cancellationToken)
@@ -520,10 +602,11 @@ namespace UnityAIBridge
 
         static async Task<string> FetchJwksAsync(string authBase, CancellationToken cancellationToken)
         {
-            if (!string.IsNullOrEmpty(_jwksJson) && (DateTime.UtcNow - _jwksFetchedUtc).TotalMinutes < 10)
+            if (!string.IsNullOrEmpty(_jwksJson) && _jwksAuthBaseUrl == authBase && (DateTime.UtcNow - _jwksFetchedUtc).TotalMinutes < 10)
                 return _jwksJson;
             string json = await StreamingHttp.GetTextAsync(authBase + "/.well-known/jwks.json", null, 30, cancellationToken).ConfigureAwait(false);
             _jwksJson = json;
+            _jwksAuthBaseUrl = authBase;
             _jwksFetchedUtc = DateTime.UtcNow;
             return json;
         }

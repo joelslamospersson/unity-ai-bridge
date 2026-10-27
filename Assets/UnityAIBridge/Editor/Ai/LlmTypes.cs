@@ -43,6 +43,8 @@ namespace UnityAIBridge
         public bool Thinking = true;
         public string ReasoningEffort = "high";
         public int MaxSteps = 8;
+        public Func<ToolCall, CancellationToken, Task<JsonValue>> ToolExecutor;
+        public Action ToolResultCommitted;
     }
 
     public sealed class TokenUsage
@@ -111,6 +113,7 @@ namespace UnityAIBridge
         public TokenUsage Usage;
         public bool IsError;
         public bool ToolOk = true;
+        public string ToolOutput;
         public List<string> ChangeIds;
 
         public static StreamEvent Status(string text) { return new StreamEvent { Kind = StreamEventKind.Status, Text = text }; }

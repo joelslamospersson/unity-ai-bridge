@@ -64,6 +64,41 @@ namespace UnityAIBridge
             }
         }
 
+        public static JsonValue ReadTextPage(string path, int startLine = 1, int lineCount = 200, int maxChars = 6000, int startColumn = 0)
+        {
+            string full;
+            string error = Permissions.CheckRead(path, out full);
+            if (error != null) throw new BridgeException(error);
+            if (!File.Exists(full)) throw new BridgeException("File not found: " + path);
+            if (IsBinaryFile(full)) throw new BridgeException("Use inspect_asset for binary assets; do not read them as text.");
+            startLine = Math.Max(1, startLine);
+            lineCount = Math.Max(1, Math.Min(500, lineCount));
+            maxChars = Math.Max(1, Math.Min(8000, maxChars));
+            startColumn = Math.Max(0, startColumn);
+            int line = 1, column = 0, scanned = 0;
+            var text = new StringBuilder();
+            bool more;
+            using (var reader = new StreamReader(full, Encoding.UTF8, true))
+            {
+                while (reader.Peek() >= 0)
+                {
+                    if (line >= startLine + (long)lineCount || text.Length >= maxChars) break;
+                    if (++scanned > 16 * 1024 * 1024)
+                        throw new BridgeException("The requested range is beyond the text scan budget. Inspect the asset with inspect_asset or choose an earlier range.");
+                    char c = (char)reader.Read();
+                    if (line >= startLine && (line > startLine || column >= startColumn)) text.Append(c);
+                    if (c == '\n') { line++; column = 0; }
+                    else column++;
+                }
+                more = reader.Peek() >= 0;
+            }
+            string content = RedactSecrets(text.ToString());
+            return JsonValue.Obj("path", path, "start_line", startLine, "start_column", startColumn,
+                "end_line", text.Length == 0 ? startLine - 1 : text[text.Length - 1] == '\n' ? line - 1 : line, "lines", CountLines(content), "content", content,
+                "truncated", more, "next_start_line", more ? line : 0, "next_start_column", more ? column : 0,
+                "hint", more ? "Read the next page with next_start_line and next_start_column, or use inspect_asset for prefab hierarchy." : "End of file.");
+        }
+
         public static bool IsBinaryFile(string fullPath)
         {
             try
@@ -151,28 +186,43 @@ namespace UnityAIBridge
 
         public static List<string> ListDirectories(string projectRelativeDir, int max = 400)
         {
+            return ListDirectories(projectRelativeDir, false, max);
+        }
+
+        public static List<string> ListDirectories(string projectRelativeDir, bool recursive, int max = 400)
+        {
             var result = new List<string>();
             string fullDir;
             string error = Permissions.CheckRead(string.IsNullOrEmpty(projectRelativeDir) ? "Assets" : projectRelativeDir, out fullDir);
             if (error != null) throw new BridgeException(error);
             if (!Directory.Exists(fullDir)) return result;
 
+            CollectDirectories(fullDir, recursive, max, result, true);
+            return result;
+        }
+
+        static void CollectDirectories(string fullDir, bool recursive, int max, List<string> result, bool top)
+        {
             string[] dirs;
             try { dirs = Directory.GetDirectories(fullDir); }
-            catch (Exception e) { throw new BridgeException("Could not list directories: " + e.Message); }
+            catch (Exception e)
+            {
+                if (top) throw new BridgeException("Could not list directories: " + e.Message);
+                return;
+            }
 
             Array.Sort(dirs, StringComparer.OrdinalIgnoreCase);
             foreach (string dir in dirs)
             {
+                if (result.Count >= max) return;
                 string rel = BridgePaths.ToProjectRelative(dir);
                 string blocked;
                 if (BridgePaths.IsDeniedRelative(rel, false, out blocked)) continue;
                 try { if ((File.GetAttributes(dir) & FileAttributes.ReparsePoint) != 0) continue; }
                 catch { continue; }
                 result.Add(rel);
-                if (result.Count >= max) break;
+                if (recursive) CollectDirectories(dir, true, max, result, false);
             }
-            return result;
         }
 
         public static List<ProjectFileInfo> ListScripts(int max = 300)
@@ -283,6 +333,8 @@ namespace UnityAIBridge
             try
             {
                 string result = Regex.Replace(text, @"sk-[A-Za-z0-9_\-]{12,}", "sk-***REDACTED***");
+                result = Regex.Replace(result, @"AIza[A-Za-z0-9_\-]{20,}", "***REDACTED_GOOGLE_KEY***");
+                result = Regex.Replace(result, @"(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}", "***REDACTED_GITHUB_TOKEN***");
                 result = Regex.Replace(result, @"(?i)bearer\s+[A-Za-z0-9_\-\.]{16,}", "Bearer ***REDACTED***");
                 result = Regex.Replace(result, @"(?i)(api[_-]?key|token|password|secret)\s*[:=]\s*[""']?[A-Za-z0-9_\-\.]{12,}[""']?", "$1=***REDACTED***");
                 return result;

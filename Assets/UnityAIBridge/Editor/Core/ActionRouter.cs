@@ -85,6 +85,39 @@ namespace UnityAIBridge
                     {
                         string path = RequiredPath(action);
                         if (!path.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase)) throw new BridgeException("create_prefab path must end with .prefab");
+                        string sourceAsset = action["source_asset"].AsString();
+                        string target = action["target"].AsString();
+                        if (!string.IsNullOrEmpty(sourceAsset))
+                        {
+                            if (!string.IsNullOrEmpty(target) || !action["spec"].IsNull)
+                                throw new BridgeException("create_prefab accepts one source: source_asset, target, or spec.");
+                            string full;
+                            string error = Permissions.CheckRead(sourceAsset, out full);
+                            if (error != null) throw new BridgeException(error);
+                            sourceAsset = BridgePaths.ToProjectRelative(full);
+                            if (AssetDatabase.LoadAssetAtPath<UnityEngine.GameObject>(sourceAsset) == null)
+                                throw new BridgeException("Prefab source asset not found: " + sourceAsset);
+                            var sourcePrefab = AssetDatabase.LoadAssetAtPath<UnityEngine.GameObject>(sourceAsset);
+                            int missingScripts = AssetService.InspectPrefabScripts(sourcePrefab)["missing_script_count"].AsInt();
+                            if (missingScripts > 0 && !action["remove_missing_scripts"].AsBool())
+                                throw new BridgeException("Source prefab contains " + missingScripts + " missing script reference(s), so Unity cannot save it. Inspect the prefab validation report. To create a visual copy, explicitly set remove_missing_scripts:true; broken references will be removed from the new copy only and gameplay is not restored.");
+                            action["source_asset"] = sourceAsset;
+                        }
+                        else if (string.IsNullOrEmpty(target) && !action["spec"].IsObject)
+                            throw new BridgeException("create_prefab requires source_asset, target, or spec. Use source_asset to reuse an existing prefab; no setup script is needed.");
+                        foreach (var existing in ChangeService.All)
+                        {
+                            if (existing.Kind != ChangeKinds.CreatePrefab || existing.TargetPath != path ||
+                                (existing.Status != ChangeStatus.Pending && existing.Status != ChangeStatus.Approved)) continue;
+                            var before = existing.Parameters;
+                            if (before["source_asset"].AsString() == action["source_asset"].AsString() &&
+                                before["target"].AsString() == action["target"].AsString() &&
+                                before["name"].AsString() == action["name"].AsString() &&
+                                before["keep_in_scene"].AsBool() == action["keep_in_scene"].AsBool() &&
+                                before["remove_missing_scripts"].AsBool() == action["remove_missing_scripts"].AsBool() &&
+                                before["spec"].ToJson(false) == action["spec"].ToJson(false)) return existing;
+                            throw new BridgeException("A different prefab change is already staged for " + path + ". Review the existing pending change first.");
+                        }
                         return ChangeService.Stage(ChangeKinds.CreatePrefab, Title("Create prefab", path, reason), path, null, action, source, false);
                     }
 

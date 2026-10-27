@@ -46,8 +46,10 @@ The suite pauses automatic asset refresh, uses `Assets/__UAIBTests__/`, starts l
 Unity 6000.6.7f1, Linux Editor, batch mode against a copy:
 
 ```
-44 passed, 0 failed   (~4.4 s of test time)
+91 passed, 0 failed   (includes prefab and approval regressions)
 ```
+
+Validated on 2026-10-26 in an isolated Unity 6000.6.7f1 project with Unity UI installed. See [chat repair notes](CHAT-REPAIR.md).
 
 The UI tests build the chat panel and the full UI Toolkit shell in memory; they do not capture pixels or simulate mouse input.
 
@@ -129,3 +131,54 @@ The upgrade moves the previous configuration and library directories without los
 9. Set **Read Only** and confirm write tools are not offered and direct staging is rejected.
 10. Import a texture, configure it as a sprite, and create/assign a prefab.
 11. Verify Explorer/Scene/Assets/Changes/MCP/Logs behave as expected.
+
+## Login and chat recovery regression coverage (2026-10-26)
+
+The suite now also covers delayed OAuth callbacks (more than two seconds), favicon requests and stale browser tabs; callback cancellation; forced renewal of a rejected but unexpired token; transient refresh errors retaining credentials; sign-out during an in-flight refresh; model catalog visibility, ordering and compatible schemas; reasoning request fields on both Responses routes; rejection of truncated streams; stopping a stream after headers arrive; Chat/Plan/Agent tool availability and rejection of unoffered tools; repair of interrupted multi-tool turns; and history retention at complete user-turn boundaries.
+
+The native panel smoke test checks that the sign-in button, composer, mode selector, reasoning selector and retry button are constructed. Final-answer tests keep thinking summaries separate from failed or malformed answers.
+
+## Latest prefab conversation regression
+
+See [prefab conversation repair](PREFAB-CONVERSATION-REPAIR.md) for the exact failed request, live proposal repair, and added tests. The real-map checks run when the source KingdomGuard map exists in the test project; the recorded 77-test run includes that fixture.
+
+## Summary layout and inline approval validation
+
+See [approval and summary validation](APPROVALS-AND-SUMMARY.md) for the new review-flow tests, rendered layout test, and actual assembly-reload test. The 91-test count includes the optional real map fixture.
+
+
+## Shared MCP installation and key application (2026-10-27)
+
+**117 passed, 0 failed** in Unity 6000.6.7f1 against `/tmp/unity-bridge-chat-fix`. MCP coverage includes saving/replacing/clearing keys across selected clients, current Context7 bearer authentication, GitHub PAT/OAuth selection, persistent target selection, Codex ↔ OpenCode sync, quoted TOML names and nested header/environment tables, multiline command arguments, environment-based credentials, working directories/timeouts, JSONC, unrelated-config preservation, source immutability, malformed configs and partial failures. Generated TOML was also parsed independently with Python's standard TOML reader, and generated configs retained mode 0600.
+
+The full MCP tab was exercised at 1100×800 in Unity's UI Toolkit shell without GUI exceptions. Test results are in `/tmp/unity-bridge-chat-fix/Library/UnityAIBridge/test-results.json`; UI smoke results are in `mcp-ui-result.json`. No real client configurations were changed by validation.
+
+
+## ChatGPT Plus / Pro login and return (2026-10-27)
+
+**130 passed, 0 failed** in an isolated Unity 6000.6.7f1 project. The added local OAuth integration test exercises first registration, PKCE code exchange using the issued client ID and exact loopback callback, signed ID-token verification, granted plan permission, browser completion pages, main-thread return events, subscription model discovery and a completed streamed inference using the OAuth token. It also covers missing plan consent, explicit reconsent, stable registration/host reuse, invalid nonce, changed callback client ID, the usage link and dismissible first-connection confirmation. The platform API key is deliberately different and is never used for the subscription request.
+
+All identity, model and inference endpoints in these tests are localhost mocks; no real account sign-in or paid inference occurs. Actual account/workspace eligibility and browser consent must be verified with the user's ChatGPT account. The production flow uses OpenAI's documented `auth.openai.com` registration and public Responses API contracts, without a Codex process.
+
+Result file: `/tmp/unity-bridge-chat-fix/Library/UnityAIBridge/test-results.json`. The existing rendered streaming/approval layout validation is also run after the account controls change.
+
+
+## ChatGPT chat-model separation (2026-10-27)
+
+**133 passed, 0 failed.** The additional regressions verify that the ChatGPT account catalog omits Codex-labelled entries while retaining visible GPT-6/GPT-6 Pro chat models, selects an exposed GPT-6 model as the preferred initial model without inventing model access, and refuses Codex model execution through the direct ChatGPT route. Cached catalogs are filtered and obsolete cached model selections are migrated. This does not provide access to existing ChatGPT website conversations or introduce a native Codex runtime.
+
+
+## Direct plan access and usage-limit reporting (2026-10-27)
+
+**134 passed, 0 failed.** A regression now verifies that a subscription usage-limit response is reported as a plan-or-app limit without inventing a reset time, retrying the limited request, discarding the session or switching billing/provider. UI and setup text no longer claim that direct requests necessarily have a separate Codex allowance. The history notice was removed from the account bar because importing website history is outside the requested scope.
+
+A read-only live catalog request using the Unity project's saved ChatGPT OAuth session returned HTTP 200 and listed GPT-6.1 Sol, GPT-6 Astra, GPT-6.1 Terra, GPT-6 Sol and GPT-6 Luna, along with earlier chat models. No live generation was performed. The response did not expose quota information, so independence from the account's Codex allowance remains unverified. See OpenAI's [shared plan usage](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions) and [usage-limit error guidance](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery).
+
+
+## Collapsed tools, Claude and Gemini (2026-10-27)
+
+**152 passed, 0 failed** in the isolated Unity 6000.6.7f1 project. New regressions verify that tool groups remain collapsed during streaming until explicitly opened, retain their full output, preserve the user's expansion choice and stay closed after the user collapses them again.
+
+Claude coverage includes model pagination and headers, streaming text/thinking and fragmented tool JSON, complete agent/tool-result loops, native schemas/system instructions, signed thinking replay, usage and rejection of incomplete responses. Gemini coverage includes filtered/paginated model discovery, API-key headers without URL credentials, thought summaries and function calls, complete tool-result loops, native schemas/system instructions, thought-signature and call-ID replay, usage, blocked prompts and incomplete responses. Provider factories, saved provider selection, credential isolation and redaction are covered as well.
+
+The rendered streaming layout validation also passed at 680×620, including full expanded tool output, thinking and accessible approval/composer controls. All new provider requests use localhost mocks. No live Claude/Gemini inference was performed, and the official Claude Code CLI was not installed in this environment, so its browser login and terminal launch still need a real account/client check. The external handoff does not claim native subscription inference.

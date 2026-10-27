@@ -50,6 +50,7 @@ namespace UnityAIBridge
             summary["urp"] = UsesUrp;
             summary["project_root"] = BridgePaths.ProjectRoot;
             summary["active_scene"] = SceneService.ActiveScene.IsValid() ? SceneService.ActiveScene.name : "(none)";
+            summary["compiling"] = EditorApplication.isCompiling;
             summary["compiler_error_count"] = ConsoleService.GetCompilerDiagnostics(200).Count;
             summary["console_error_count"] = ConsoleService.GetErrors(200, false).Count;
 

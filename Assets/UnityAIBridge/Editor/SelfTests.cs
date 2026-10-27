@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.UIElements;
 
 namespace UnityAIBridge
 {
@@ -19,7 +20,7 @@ namespace UnityAIBridge
     /// In-editor self tests. They run against the real project and clean up after
     /// themselves; results are written to Library/UnityAIBridge/test-results.json.
     /// </summary>
-    public static class SelfTests
+    public static partial class SelfTests
     {
         public const string TestFolder = "Assets/__UAIBTests__";
 
@@ -172,8 +173,8 @@ namespace UnityAIBridge
             try
             {
                 string error;
-                string text = FileService.ReadText("Assets/TutorialInfo/Editor/ReadmeEditor.cs", out error);
-                Check("read_existing_script", text != null && text.IndexOf("class ReadmeEditor", StringComparison.Ordinal) >= 0,
+                string text = FileService.ReadText("Assets/UnityAIBridge/Editor/Ai/AgentRunner.cs", out error);
+                Check("read_existing_script", text != null && text.IndexOf("class AgentRunner", StringComparison.Ordinal) >= 0,
                     text == null ? error : null);
             }
             catch (Exception e) { Check("read_existing_script", false, e.Message); }
@@ -550,6 +551,17 @@ namespace UnityAIBridge
             }
             catch (Exception e) { Check("chatgpt_id_token_validation", false, e.Message); }
 
+            var prefabRegressions = RunPrefabRegressionTests();
+            while (prefabRegressions.MoveNext()) yield return prefabRegressions.Current;
+
+            var approvals = RunApprovalTests();
+            while (approvals.MoveNext()) yield return approvals.Current;
+            var autoAccept = RunConversationAutoAcceptTests();
+            while (autoAccept.MoveNext()) yield return autoAccept.Current;
+
+            var reliability = RunChatReliabilityTests();
+            while (reliability.MoveNext()) yield return reliability.Current;
+
             // 23. DeepSeek streaming, tool calls, usage and cost
             var deepSeekTest = RunDeepSeekStreamTest();
             while (deepSeekTest.MoveNext()) yield return deepSeekTest.Current;
@@ -688,6 +700,8 @@ namespace UnityAIBridge
             }
             catch (Exception e) { Check("mcp_catalog_oauth_opencode", false, e.Message); }
 
+            RunMcpSyncTests();
+
             // 33. Tool loop stages a change, requires approval, then applies
             var loopTest = RunAgentToolLoopTest();
             while (loopTest.MoveNext()) yield return loopTest.Current;
@@ -760,7 +774,7 @@ namespace UnityAIBridge
             try
             {
                 var panel = new ChatPanel();
-                bool ok = panel.childCount > 0;
+                bool ok = panel.childCount > 0 && panel.Q<Button>("chatgpt-connect") != null && panel.Q<TextField>("chat-composer") != null && panel.Q<DropdownField>("chat-mode") != null && panel.Q<DropdownField>("chat-reasoning") != null && panel.Q<Button>("chat-retry") != null;
                 panel.Detach();
                 Check("chat_panel_builds", ok, "children=" + panel.childCount);
             }
@@ -812,6 +826,40 @@ namespace UnityAIBridge
             }
             catch (Exception e) { Check("activity_group_file_cards", false, e.ToString()); }
 
+            // 39b. Activity foldout stays open while tool results update
+            try
+            {
+                var panel = new ChatPanel();
+                var view = new ChatMessageView(panel);
+                var activity = new ChatMessage
+                {
+                    Id = "activity-foldout-test",
+                    Role = "activity",
+                    TimeLocal = "12:00:00",
+                    Activities = new List<ChatToolActivity>
+                    {
+                        new ChatToolActivity { CallId = "c1", Tool = "read_project_file", Status = "Running", Ok = true, Detail = "Reading" }
+                    }
+                };
+
+                view.Bind(activity);
+                var foldout = view.Q<Foldout>();
+                bool found = foldout != null;
+                if (foldout != null) foldout.value = true;
+
+                activity.Activities[0].Status = "Done";
+                activity.Activities[0].Detail = "Read Assets/Test.cs";
+                view.Bind(activity);
+
+                var updated = view.Q<Foldout>();
+                bool stillOpen = updated != null && updated.value;
+                bool updatedText = updated != null && updated.text.IndexOf("done", StringComparison.OrdinalIgnoreCase) >= 0;
+                panel.Detach();
+                Check("activity_foldout_preserves_expansion", found && stillOpen && updatedText,
+                    "found=" + found + " open=" + stillOpen + " text=" + (updated != null ? updated.text : "?"));
+            }
+            catch (Exception e) { Check("activity_foldout_preserves_expansion", false, e.ToString()); }
+
             // 40. History load benchmark at representative sizes
             try
             {
@@ -841,6 +889,68 @@ namespace UnityAIBridge
                 Check("history_load_benchmark", ok, string.Join(" ", details.ToArray()));
             }
             catch (Exception e) { Check("history_load_benchmark", false, e.ToString()); }
+
+            // 41. Tool step limit ends with a tool-free final answer instead of failing
+            var limitProvider = new ScriptedProvider();
+            limitProvider.Turns.Enqueue(new ProviderTurn
+            {
+                Text = string.Empty,
+                ToolCalls = new List<ToolCall> { new ToolCall { Id = "call_limit", Name = "get_bridge_status", Arguments = "{}" } },
+                Usage = new TokenUsage { PromptTokens = 10, CompletionTokens = 5 }
+            });
+            limitProvider.Turns.Enqueue(new ProviderTurn
+            {
+                Text = "Final answer after the tool limit.",
+                Usage = new TokenUsage { PromptTokens = 20, CompletionTokens = 8 }
+            });
+
+            var limitTranscript = new List<LlmMessage>();
+            var limitRequest = new LlmRequest
+            {
+                ProviderId = "scripted",
+                Tools = McpTools.GetToolSpecs(true),
+                Model = "scripted",
+                Instructions = "system",
+                Messages = limitTranscript,
+                MaxSteps = 1
+            };
+
+            ProviderTurn limitResult = null;
+            Exception limitFailure = null;
+            var limitTask = Task.Run(async () =>
+            {
+                try { limitResult = await AgentRunner.RunAsync(limitProvider, limitRequest, limitTranscript, e => { }, CancellationToken.None); }
+                catch (Exception e) { limitFailure = e; }
+            });
+
+            float limitStart = Time.realtimeSinceStartup;
+            while (!limitTask.IsCompleted && Time.realtimeSinceStartup - limitStart < 30f) yield return null;
+
+            try
+            {
+                if (!limitTask.IsCompleted) limitFailure = new AgentException("agent limit test timed out.");
+                else if (limitTask.IsFaulted) limitFailure = limitTask.Exception != null ? limitTask.Exception.GetBaseException() : new AgentException("task failed");
+
+                bool toolsDisabled = limitProvider.LastRequest != null && limitProvider.LastRequest.Tools != null && limitProvider.LastRequest.Tools.Count == 0;
+                bool limitOk = limitFailure == null && limitResult != null &&
+                               limitResult.Text == "Final answer after the tool limit." &&
+                               toolsDisabled && limitTranscript.Count >= 3;
+                Check("agent_final_answer_at_step_limit", limitOk,
+                    limitFailure != null ? limitFailure.Message : "text=" + (limitResult != null ? limitResult.Text : "(null)") +
+                    " tools=" + (limitProvider.LastRequest != null && limitProvider.LastRequest.Tools != null ? limitProvider.LastRequest.Tools.Count.ToString() : "?") +
+                    " transcript=" + limitTranscript.Count);
+            }
+            catch (Exception e) { Check("agent_final_answer_at_step_limit", false, e.ToString()); }
+
+            // 42. Malformed tool markup in a final answer is retried and never streamed
+            var malformedFinal = RunAgentMalformedFinalAnswerTest();
+            while (malformedFinal.MoveNext()) yield return malformedFinal.Current;
+
+            var planLogin = RunChatGptPlanLoginTests();
+            while (planLogin.MoveNext()) yield return planLogin.Current;
+
+            var nativeProviders = RunNativeProviderTests();
+            while (nativeProviders.MoveNext()) yield return nativeProviders.Current;
 
             Finish();
         }
@@ -1135,7 +1245,7 @@ namespace UnityAIBridge
             var request = new LlmRequest
             {
                 ProviderId = chatGpt ? BridgeSettings.ProviderChatGpt : BridgeSettings.ProviderOpenAi,
-                Model = "gpt-test",
+                Model = "gpt-5-test",
                 Instructions = "system",
                 Messages = new List<LlmMessage> { new LlmMessage { Role = "user", Content = "hello" } },
                 Tools = new List<ToolSpec> { new ToolSpec { Name = "project_summary", Description = "summary", Schema = JsonValue.Obj("type", "object", "properties", JsonValue.NewObject()) } },
@@ -1172,6 +1282,7 @@ namespace UnityAIBridge
                               turn.Usage.CompletionTokens == 3 &&
                               !string.IsNullOrEmpty(turn.RawItemsJson) &&
                               turn.RawItemsJson.IndexOf("fc_1", StringComparison.Ordinal) >= 0;
+                bool reasoningOk = JsonValue.Parse(bodySent)["reasoning"]["effort"].AsString() == "high" && JsonValue.Parse(bodySent)["include"][0].AsString() == "reasoning.encrypted_content";
                 bool requestOk = chatGpt
                     ? bodySent.IndexOf("\"additional_tools\"", StringComparison.Ordinal) >= 0 &&
                       bodySent.IndexOf("\"store\":false", StringComparison.Ordinal) >= 0 &&
@@ -1182,7 +1293,7 @@ namespace UnityAIBridge
                     : bodySent.IndexOf("\"tools\"", StringComparison.Ordinal) >= 0 &&
                       bodySent.IndexOf("\"max_output_tokens\"", StringComparison.Ordinal) >= 0 &&
                       bodySent.IndexOf("\"additional_tools\"", StringComparison.Ordinal) < 0;
-                Check(chatGpt ? "chatgpt_oauth_responses_request" : "openai_responses_stream", common && requestOk,
+                Check(chatGpt ? "chatgpt_oauth_responses_request" : "openai_responses_stream", common && requestOk && reasoningOk,
                     failure != null ? failure.Message : "common=" + common + " requestOk=" + requestOk + " body=" + TruncateForTest(bodySent));
             }
             finally
@@ -1244,7 +1355,7 @@ namespace UnityAIBridge
             secrets.ChatGptIdToken = "old_id";
             secrets.ChatGptClientId = "oaiapp_test";
             secrets.ChatGptScopes = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
-            secrets.ChatGptExpiresAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 10;
+            secrets.ChatGptExpiresAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 3600;
             secrets.ChatGptPlanUsageEnabled = true;
             ChatGptAuth.Reload();
 
@@ -1252,7 +1363,7 @@ namespace UnityAIBridge
             Exception failure = null;
             var task = Task.Run(async () =>
             {
-                try { token = await ChatGptAuth.EnsureAccessTokenAsync(CancellationToken.None); }
+                try { token = await ChatGptAuth.ForceRefreshAsync(CancellationToken.None); }
                 catch (Exception e) { failure = e; }
             });
 
@@ -1283,6 +1394,51 @@ namespace UnityAIBridge
                 BridgeSettings.SaveSecrets();
                 ChatGptAuth.Reload();
             }
+            string oldAuthBase = ChatGptAuth.AuthBaseUrl;
+            string secretSnapshot = JsonUtility.ToJson(secrets);
+            string oldModels = BridgeSettings.Current.ChatGptModelsJson;
+            using (var renewalServer = new LocalTestServer((r, b) => new MockReply { Status = 503, Body = "{\"error\":\"temporarily_unavailable\"}" }))
+            {
+                ChatGptAuth.AuthBaseUrl = renewalServer.BaseUrl;
+                secrets.ChatGptAccessToken = "access_test"; secrets.ChatGptRefreshToken = "refresh_test";
+                secrets.ChatGptClientId = "oaiapp_test"; secrets.ChatGptExpiresAtUnix = 0;
+                var transient = Task.Run(async () =>
+                {
+                    try { await ChatGptAuth.EnsureAccessTokenAsync(CancellationToken.None); return false; }
+                    catch (BridgeException) { return secrets.ChatGptRefreshToken == "refresh_test" && secrets.ChatGptAccessToken == "access_test"; }
+                });
+                while (!transient.IsCompleted) yield return null;
+                Check("chatgpt_transient_refresh_keeps_session", transient.Status == TaskStatus.RanToCompletion && transient.Result);
+            }
+            using (var arrived = new ManualResetEventSlim())
+            using (var release = new ManualResetEventSlim())
+            using (var renewalServer = new LocalTestServer((r, b) =>
+            {
+                if (r.Url.AbsolutePath.Contains("openid-configuration")) return new MockReply { Body = "{}" };
+                arrived.Set(); release.Wait(5000);
+                return new MockReply { Body = JsonValue.Obj("access_token", "late_access", "refresh_token", "late_refresh", "expires_in", 3600).ToJson(false) };
+            }))
+            {
+                ChatGptAuth.AuthBaseUrl = renewalServer.BaseUrl;
+                secrets.ChatGptAccessToken = "access_test"; secrets.ChatGptRefreshToken = "refresh_test";
+                secrets.ChatGptClientId = "oaiapp_test"; secrets.ChatGptExpiresAtUnix = 0;
+                var refreshing = Task.Run(async () =>
+                {
+                    try { await ChatGptAuth.EnsureAccessTokenAsync(CancellationToken.None); }
+                    catch (OperationCanceledException) { }
+                });
+                float until = Time.realtimeSinceStartup + 8f;
+                while (!arrived.IsSet && !refreshing.IsCompleted && Time.realtimeSinceStartup < until) yield return null;
+                var signingOut = ChatGptAuth.SignOutAsync();
+                release.Set();
+                while (!refreshing.IsCompleted || !signingOut.IsCompleted) yield return null;
+                Check("chatgpt_signout_wins_over_inflight_refresh", arrived.IsSet && !refreshing.IsFaulted &&
+                    !signingOut.IsFaulted && !ChatGptAuth.HasTokens && !ChatGptAuth.IsReadyForInference);
+            }
+            ChatGptAuth.AuthBaseUrl = oldAuthBase;
+            JsonUtility.FromJsonOverwrite(secretSnapshot, secrets);
+            BridgeSettings.Current.ChatGptModelsJson = oldModels;
+            BridgeSettings.SaveSecrets(); BridgeSettings.Save(); ChatGptAuth.Reload();
             yield break;
         }
 
@@ -1405,6 +1561,7 @@ namespace UnityAIBridge
             var request = new LlmRequest
             {
                 ProviderId = "scripted",
+                Tools = McpTools.GetToolSpecs(true),
                 Model = "scripted",
                 Instructions = "system",
                 Messages = transcript,
@@ -1465,9 +1622,141 @@ namespace UnityAIBridge
             yield break;
         }
 
+        static IEnumerator RunAgentMalformedFinalAnswerTest()
+        {
+            const string malformed = "<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"read_project_file\">\n<｜｜DSML｜｜ parameter name=\"path\">Assets/x</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>";
+
+            var provider = new ScriptedProvider { EmitTextDeltas = true };
+            provider.Turns.Enqueue(new ProviderTurn
+            {
+                Text = string.Empty,
+                ToolCalls = new List<ToolCall> { new ToolCall { Id = "call_malformed", Name = "get_bridge_status", Arguments = "{}" } }
+            });
+            provider.Turns.Enqueue(new ProviderTurn { Text = malformed, Reasoning = "first malformed reasoning" });
+            provider.Turns.Enqueue(new ProviderTurn { Text = "Recovered final answer.", Reasoning = "retry reasoning" });
+
+            var transcript = new List<LlmMessage>();
+            var request = new LlmRequest
+            {
+                ProviderId = "scripted",
+                Tools = McpTools.GetToolSpecs(true),
+                Model = "scripted",
+                Instructions = "system",
+                Messages = transcript,
+                MaxSteps = 1
+            };
+
+            var events = new List<StreamEvent>();
+            ProviderTurn result = null;
+            Exception failure = null;
+            var task = Task.Run(async () =>
+            {
+                try { result = await AgentRunner.RunAsync(provider, request, transcript, e => { lock (events) events.Add(e); }, CancellationToken.None); }
+                catch (Exception e) { failure = e; }
+            });
+
+            float start = Time.realtimeSinceStartup;
+            while (!task.IsCompleted && Time.realtimeSinceStartup - start < 30f) yield return null;
+
+            try
+            {
+                if (!task.IsCompleted) failure = new AgentException("malformed final answer test timed out.");
+                else if (task.IsFaulted) failure = task.Exception != null ? task.Exception.GetBaseException() : new AgentException("task failed");
+
+                bool badStreamed = false;
+                bool cleanStreamed = false;
+                lock (events)
+                {
+                    foreach (var evt in events)
+                    {
+                        if (evt == null || evt.Kind != StreamEventKind.TextDelta) continue;
+                        if (evt.Text.IndexOf("<｜", StringComparison.Ordinal) >= 0) badStreamed = true;
+                        if (evt.Text == "Recovered final answer.") cleanStreamed = true;
+                    }
+                }
+
+                bool toolsDisabled = provider.LastRequest != null && provider.LastRequest.Tools != null && provider.LastRequest.Tools.Count == 0;
+                bool askedForPlainText = false;
+                if (provider.LastRequest != null && provider.LastRequest.Messages != null && provider.LastRequest.Messages.Count > 0)
+                {
+                    var last = provider.LastRequest.Messages[provider.LastRequest.Messages.Count - 1];
+                    askedForPlainText = last.Role == "user" && (last.Content ?? string.Empty).IndexOf("tool budget is exhausted", StringComparison.OrdinalIgnoreCase) >= 0;
+                }
+                bool transcriptClean = transcript.Count >= 3 && transcript[transcript.Count - 1].Content == "Recovered final answer.";
+
+                Check("agent_final_answer_retries_malformed_output",
+                    failure == null && result != null && result.Text == "Recovered final answer." &&
+                    !badStreamed && cleanStreamed && toolsDisabled && askedForPlainText && transcriptClean,
+                    failure != null ? failure.Message : "badStreamed=" + badStreamed + " cleanStreamed=" + cleanStreamed +
+                    " tools=" + (provider.LastRequest != null && provider.LastRequest.Tools != null ? provider.LastRequest.Tools.Count.ToString() : "?") +
+                    " retryInstruction=" + askedForPlainText + " transcriptClean=" + transcriptClean);
+            }
+            catch (Exception e) { Check("agent_final_answer_retries_malformed_output", false, e.ToString()); }
+
+            var reasonProvider = new ScriptedProvider { EmitTextDeltas = true };
+            reasonProvider.Turns.Enqueue(new ProviderTurn
+            {
+                Text = string.Empty,
+                ToolCalls = new List<ToolCall> { new ToolCall { Id = "call_reason", Name = "get_bridge_status", Arguments = "{}" } }
+            });
+            reasonProvider.Turns.Enqueue(new ProviderTurn { Text = malformed, Reasoning = "Coherent analysis of the asset folder." });
+            reasonProvider.Turns.Enqueue(new ProviderTurn { Text = malformed, Reasoning = string.Empty });
+
+            var reasonTranscript = new List<LlmMessage>();
+            var reasonRequest = new LlmRequest
+            {
+                ProviderId = "scripted",
+                Tools = McpTools.GetToolSpecs(true),
+                Model = "scripted",
+                Instructions = "system",
+                Messages = reasonTranscript,
+                MaxSteps = 1
+            };
+
+            var reasonEvents = new List<StreamEvent>();
+            ProviderTurn reasonResult = null;
+            Exception reasonFailure = null;
+            var reasonTask = Task.Run(async () =>
+            {
+                try { reasonResult = await AgentRunner.RunAsync(reasonProvider, reasonRequest, reasonTranscript, e => { lock (reasonEvents) reasonEvents.Add(e); }, CancellationToken.None); }
+                catch (Exception e) { reasonFailure = e; }
+            });
+
+            float reasonStart = Time.realtimeSinceStartup;
+            while (!reasonTask.IsCompleted && Time.realtimeSinceStartup - reasonStart < 30f) yield return null;
+
+            try
+            {
+                if (!reasonTask.IsCompleted) reasonFailure = new AgentException("reasoning fallback test timed out.");
+                else if (reasonTask.IsFaulted) reasonFailure = reasonTask.Exception != null ? reasonTask.Exception.GetBaseException() : new AgentException("task failed");
+
+                bool badStreamed = false;
+                bool reasoningStreamed = false;
+                lock (reasonEvents)
+                {
+                    foreach (var evt in reasonEvents)
+                    {
+                        if (evt == null || evt.Kind != StreamEventKind.TextDelta) continue;
+                        if (evt.Text.IndexOf("<｜", StringComparison.Ordinal) >= 0) badStreamed = true;
+                        if (evt.Text.IndexOf("Coherent analysis of the asset folder.", StringComparison.Ordinal) >= 0) reasoningStreamed = true;
+                    }
+                }
+
+                bool ok = reasonFailure is AgentException && reasonResult == null && !badStreamed && !reasoningStreamed;
+                Check("agent_final_answer_keeps_reasoning_separate", ok,
+                    reasonFailure != null ? reasonFailure.Message : "badStreamed=" + badStreamed + " reasoningStreamed=" + reasoningStreamed +
+                    " text=" + (reasonResult != null ? reasonResult.Text : "(null)"));
+            }
+            catch (Exception e) { Check("agent_final_answer_uses_reasoning_fallback", false, e.ToString()); }
+
+            yield break;
+        }
+
         sealed class ScriptedProvider : ILiveProvider
         {
             public readonly Queue<ProviderTurn> Turns = new Queue<ProviderTurn>();
+            public LlmRequest LastRequest;
+            public bool EmitTextDeltas;
             public string Id { get { return "scripted"; } }
             public string DisplayName { get { return "Scripted"; } }
             public string BillingNote { get { return "test"; } }
@@ -1480,9 +1769,298 @@ namespace UnityAIBridge
             public Task<ProviderTurn> StreamTurnAsync(LlmRequest request, Action<StreamEvent> onEvent, CancellationToken cancellationToken)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                LastRequest = request;
                 if (Turns.Count == 0) return Task.FromResult(new ProviderTurn { Text = "No more turns." });
-                return Task.FromResult(Turns.Dequeue());
+                var turn = Turns.Dequeue();
+                if (EmitTextDeltas && !string.IsNullOrEmpty(turn.Text)) onEvent(StreamEvent.Delta(turn.Text));
+                return Task.FromResult(turn);
             }
+        }
+
+        static IEnumerator RunPrefabRegressionTests()
+        {
+            string sourcePath = TestFolder + "/TowerMap.prefab";
+            string destination = TestFolder + "/battle.prefab";
+            GameObject source = new GameObject("TowerMap");
+            var child = new GameObject("Tower");
+            child.transform.SetParent(source.transform);
+            child.AddComponent<BoxCollider2D>();
+            PrefabUtility.SaveAsPrefabAsset(source, sourcePath);
+            UnityEngine.Object.DestroyImmediate(source);
+            string original = File.ReadAllText(BridgePaths.ToAbsolute(sourcePath));
+            string originalGuid = AssetDatabase.AssetPathToGUID(sourcePath);
+            var inspect = AssetService.InspectAsset(sourcePath, 3, 10);
+            Check("prefab_inspection_exposes_bounded_hierarchy", inspect["hierarchy"]["children"][0]["name"].AsString() == "Tower" &&
+                inspect["reuse_hint"].AsString().Contains("source_asset"));
+
+            var args = JsonValue.Obj("path", destination, "source_asset", sourcePath, "name", "battle", "keep_in_scene", true);
+            var staged = McpTools.InvokeOnMain("create_prefab", args);
+            string id = staged["structuredContent"]["id"].AsString();
+            var change = ChangeService.Find(id);
+            if (change != null) _testChangeIds.Add(change.Id);
+            Check("prefab_asset_reuse_stages_real_change", !staged["isError"].AsBool() && change != null && change.Kind == ChangeKinds.CreatePrefab &&
+                change.TargetPath == destination && change.Status == ChangeStatus.Pending && !File.Exists(BridgePaths.ToAbsolute(destination)));
+            var again = McpTools.InvokeOnMain("create_prefab", args);
+            Check("prefab_repeat_proposal_reuses_pending_change", again["structuredContent"]["id"].AsString() == id);
+            string error = change != null ? ChangeService.Approve(id) ?? ChangeService.Apply(id) : "No staged prefab";
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(destination);
+            var instance = SceneService.FindByPath("battle");
+            Check("prefab_reuse_creates_connected_scene_instance", error == null && prefab != null && prefab.name == "battle" &&
+                instance != null && instance.transform.Find("Tower") != null && instance.transform.Find("Tower").GetComponent<BoxCollider2D>() != null &&
+                PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(instance) == destination, error);
+            Check("prefab_reuse_preserves_original_asset_and_guid", File.ReadAllText(BridgePaths.ToAbsolute(sourcePath)) == original && AssetDatabase.AssetPathToGUID(sourcePath) == originalGuid);
+            Undo.PerformUndo();
+            Check("prefab_reuse_scene_creation_supports_undo", instance == null && AssetDatabase.LoadAssetAtPath<GameObject>(destination) != null);
+            if (instance != null) UnityEngine.Object.DestroyImmediate(instance);
+
+            var invalid = McpTools.InvokeOnMain("create_prefab", JsonValue.Obj("path", TestFolder + "/Invalid.prefab"));
+            var outside = McpTools.InvokeOnMain("create_prefab", JsonValue.Obj("path", TestFolder + "/Invalid.prefab", "source_asset", "../outside.prefab"));
+            var ambiguous = McpTools.InvokeOnMain("create_prefab", JsonValue.Obj("path", TestFolder + "/Invalid.prefab", "source_asset", sourcePath, "target", "Tower"));
+            Check("prefab_reuse_rejects_missing_unsafe_and_ambiguous_sources", invalid["isError"].AsBool() && outside["isError"].AsBool() && ambiguous["isError"].AsBool());
+
+            // Reproduce the exact agent sequence: preamble, direct tool proposal, final response.
+            var provider = new ScriptedProvider { EmitTextDeltas = true };
+            string agentDestination = TestFolder + "/AgentBattle.prefab";
+            provider.Turns.Enqueue(new ProviderTurn { Text = "I found the map.", ToolCalls = new List<ToolCall> {
+                new ToolCall { Id = "prefab_reuse", Name = "create_prefab", Arguments = JsonValue.Obj("path", agentDestination,
+                    "source_asset", sourcePath, "name", "AgentBattle", "keep_in_scene", true).ToJson(false) } } });
+            provider.Turns.Enqueue(new ProviderTurn { Text = "The prefab and scene instance are staged for review." });
+            var transcript = new List<LlmMessage> { new LlmMessage { Role = "user", Content = "Reuse the tower defence map as battle." } };
+            var events = new List<StreamEvent>();
+            var task = Task.Run(async () => await AgentRunner.RunAsync(provider, new LlmRequest { Model = "scripted", Tools = McpTools.GetToolSpecs(true), MaxSteps = 3 },
+                transcript, e => { lock (events) events.Add(e); }, CancellationToken.None));
+            while (!task.IsCompleted) yield return null;
+            var visible = new StringBuilder();
+            lock (events) foreach (var e in events) if (e.Kind == StreamEventKind.TextDelta) visible.Append(e.Text);
+            Check("agent_prefab_request_uses_native_tool_and_separates_messages", !task.IsFaulted &&
+                visible.ToString() == "I found the map.\n\nThe prefab and scene instance are staged for review." &&
+                transcript.Count == 4 && transcript[2].Role == "tool" && !File.Exists(BridgePaths.ToAbsolute(agentDestination)));
+            string obsoleteId = null;
+            foreach (var c in ChangeService.All) if (c.TargetPath == agentDestination) { _testChangeIds.Add(c.Id); obsoleteId = c.Id; }
+            var discard = McpTools.InvokeOnMain("discard_pending_changes", JsonValue.Obj("ids", JsonValue.Arr(obsoleteId)));
+            var discardApplied = McpTools.InvokeOnMain("discard_pending_changes", JsonValue.Obj("ids", JsonValue.Arr(id)));
+            Check("discard_obsolete_proposals_preserves_applied_changes", !discard["isError"].AsBool() && ChangeService.Find(obsoleteId).Status == ChangeStatus.Rejected &&
+                discardApplied["isError"].AsBool() && ChangeService.Find(id).Status == ChangeStatus.Applied && File.Exists(BridgePaths.ToAbsolute(destination)));
+
+            var currentState = JsonValue.Parse(ChatService.BuildChangeStateContext());
+            bool sawDiscarded = false, sawApplied = false;
+            foreach (var state in currentState.ArrayValue)
+            {
+                if (state["id"].AsString() == obsoleteId) sawDiscarded = state["status"].AsString() == ChangeStatus.Rejected;
+                if (state["id"].AsString() == id) sawApplied = state["status"].AsString() == ChangeStatus.Applied;
+            }
+            Check("agent_context_uses_current_proposal_status", sawDiscarded && sawApplied);
+
+            // The real map from the failed conversation, if present in this project.
+            const string actual = "Assets/Assets/_Placeholder/KingdomGuard/_Export/KG_Level1_Map.prefab";
+            if (File.Exists(BridgePaths.ToAbsolute(actual)))
+            {
+                var originalMap = AssetDatabase.LoadAssetAtPath<GameObject>(actual);
+                string guid = AssetDatabase.AssetPathToGUID(actual);
+                string originalText = File.ReadAllText(BridgePaths.ToAbsolute(actual));
+                int sourceMissing = AssetService.InspectPrefabScripts(originalMap)["missing_script_count"].AsInt();
+                var blockedSource = McpTools.InvokeOnMain("create_prefab", JsonValue.Obj("path", TestFolder + "/MustNotSave.prefab", "source_asset", actual));
+                Check("prefab_missing_scripts_reported_before_staging", sourceMissing > 0 && blockedSource["isError"].AsBool());
+                string actualDestination = TestFolder + "/RealBattle.prefab";
+                var result = McpTools.InvokeOnMain("create_prefab", JsonValue.Obj("path", actualDestination, "source_asset", actual, "name", "RealBattle", "keep_in_scene", true, "remove_missing_scripts", true));
+                string actualId = result["structuredContent"]["id"].AsString();
+                if (!string.IsNullOrEmpty(actualId)) _testChangeIds.Add(actualId);
+                string actualError = string.IsNullOrEmpty(actualId) ? result.ToJson(false) : ChangeService.Approve(actualId) ?? ChangeService.Apply(actualId);
+                var realBattle = SceneService.FindByPath("RealBattle");
+                Check("real_tower_defence_prefab_reuse_regression", actualError == null && realBattle != null &&
+                    realBattle.transform.childCount == originalMap.transform.childCount &&
+                    PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(realBattle) == actualDestination &&
+                    AssetDatabase.AssetPathToGUID(actual) == guid && originalMap.name == "KG_Level1_Map" &&
+                    AssetService.InspectPrefabScripts(realBattle)["missing_script_count"].AsInt() == 0 &&
+                    AssetService.InspectPrefabScripts(originalMap)["missing_script_count"].AsInt() == sourceMissing &&
+                    File.ReadAllText(BridgePaths.ToAbsolute(actual)) == originalText, actualError);
+                if (realBattle != null) UnityEngine.Object.DestroyImmediate(realBattle);
+            }
+
+            string largePath = TestFolder + "/LargePrefab.txt";
+            var large = new StringBuilder();
+            for (int line = 1; line <= 10000; line++) large.Append("line ").Append(line).Append(' ').Append(new string('x', 260)).Append('\n');
+            File.WriteAllText(BridgePaths.ToAbsolute(largePath), large.ToString());
+            var page = McpTools.InvokeOnMain("read_project_file", JsonValue.Obj("path", largePath, "start_line", 840, "line_count", 2, "max_chars", 1000));
+            var data = page["structuredContent"];
+            Check("large_file_read_returns_requested_lines", !page["isError"].AsBool() && data["content"].AsString().StartsWith("line 840 ", StringComparison.Ordinal) &&
+                data["content"].AsString().Contains("line 841 ") && !data["content"].AsString().Contains("line 842 ") && data["next_start_line"].AsInt() == 842 && data["end_line"].AsInt() == 841);
+            File.WriteAllText(BridgePaths.ToAbsolute(largePath), "abcdefghijk\nsecond\n");
+            var first = FileService.ReadTextPage(largePath, 1, 10, 5);
+            var next = FileService.ReadTextPage(largePath, first["next_start_line"].AsInt(), 10, 5, first["next_start_column"].AsInt());
+            Check("long_line_read_continuation_does_not_skip_text", first["content"].AsString() == "abcde" && next["content"].AsString() == "fghij");
+            string compact = AgentRunner.CompactToolResult(new string('"', 40000), "list_project_files", new List<string> { "pending-id" });
+            var compactJson = JsonValue.Parse(compact);
+            Check("oversize_tool_result_is_bounded_valid_json", compact.Length <= 18000 && compactJson["truncated"].AsBool() && compactJson["change_ids"][0].AsString() == "pending-id");
+            Check("tool_activity_summary_is_readable", AgentRunner.SummarizeToolResult(new ToolCall { Name = "project_summary" }, "{\"project\":\"Example\",\"unity_version\":\"6\"}") == "Example · Unity 6");
+
+            var emptyProvider = new ScriptedProvider { EmitTextDeltas = true };
+            emptyProvider.Turns.Enqueue(new ProviderTurn { Reasoning = "Reasoning only.", Text = "", Usage = new TokenUsage { CompletionTokens = 20 } });
+            emptyProvider.Turns.Enqueue(new ProviderTurn { Text = "Recovered user-visible answer.", Usage = new TokenUsage { CompletionTokens = 10 } });
+            var emptyTranscript = new List<LlmMessage> { new LlmMessage { Role = "user", Content = "Explain the map" } };
+            var emptyTask = Task.Run(async () => await AgentRunner.RunAsync(emptyProvider, new LlmRequest { Model = "scripted", MaxOutputTokens = 100 }, emptyTranscript, e => { }, CancellationToken.None));
+            while (!emptyTask.IsCompleted) yield return null;
+            Check("reasoning_only_turn_recovers_without_rerunning_tools", !emptyTask.IsFaulted && emptyTask.Result.Text == "Recovered user-visible answer." &&
+                emptyTask.Result.Usage.CompletionTokens == 30 && emptyProvider.LastRequest.Tools.Count == 0 && emptyProvider.LastRequest.MaxOutputTokens >= 8192 && emptyTranscript.Count == 2);
+            var neverAnswers = new ScriptedProvider();
+            neverAnswers.Turns.Enqueue(new ProviderTurn()); neverAnswers.Turns.Enqueue(new ProviderTurn());
+            var failedRecovery = Task.Run(async () => await AgentRunner.RunAsync(neverAnswers, new LlmRequest { Model = "scripted" }, new List<LlmMessage>(), e => { }, CancellationToken.None));
+            while (!failedRecovery.IsCompleted) yield return null;
+            Check("empty_response_recovery_is_bounded", failedRecovery.IsFaulted && failedRecovery.Exception.GetBaseException() is AgentException && neverAnswers.Turns.Count == 0);
+        }
+
+        static IEnumerator RunChatReliabilityTests()
+        {
+            var task = Task.Run(async () =>
+            {
+                // A human usually needs longer than one second to complete OAuth.
+                using (var listener = new HttpListener())
+                using (var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+                using (var client = new HttpClient(new HttpClientHandler { UseProxy = false }))
+                {
+                    listener.Prefixes.Add("http://127.0.0.1:7831/");
+                    listener.Start();
+                    var callback = ChatGptAuth.WaitForCallbackAsync(listener, "expected", deadline.Token);
+                    await Task.Delay(2200);
+                    await client.GetAsync("http://127.0.0.1:7831/favicon.ico");
+                    await client.GetAsync("http://127.0.0.1:7831/auth/callback?state=stale&code=ignore");
+                    await client.GetAsync("http://127.0.0.1:7831/auth/callback?state=expected&code=valid&client_id=oaiapp_test");
+                    var result = await callback;
+                    if (result[0] != "valid" || result[1] != "oaiapp_test") throw new Exception("Wrong OAuth callback.");
+                }
+            });
+            while (!task.IsCompleted) yield return null;
+            Check("chatgpt_delayed_callback_and_stale_tab", !task.IsFaulted && !task.IsCanceled,
+                task.Exception != null ? task.Exception.GetBaseException().Message : null);
+
+            var cancelTask = Task.Run(async () =>
+            {
+                using (var listener = new HttpListener())
+                using (var cancel = new CancellationTokenSource())
+                {
+                    listener.Prefixes.Add("http://127.0.0.1:7831/"); listener.Start();
+                    var callback = ChatGptAuth.WaitForCallbackAsync(listener, "expected", cancel.Token);
+                    cancel.CancelAfter(100);
+                    try { await callback; throw new Exception("Cancellation was ignored."); }
+                    catch (OperationCanceledException) { }
+                }
+            });
+            while (!cancelTask.IsCompleted) yield return null;
+            Check("chatgpt_callback_cancels", !cancelTask.IsFaulted, cancelTask.Exception != null ? cancelTask.Exception.GetBaseException().Message : null);
+
+            var catalog = OpenAiResponsesProvider.ParseChatGptModels(JsonValue.Obj("models", JsonValue.Arr(
+                JsonValue.Obj("slug", "preferred", "display_name", "Preferred", "visibility", "list"),
+                JsonValue.Obj("slug", "hidden", "visibility", "hide"),
+                JsonValue.Obj("slug", "second", "display_name", "Second", "visibility", "list"))));
+            var compatible = OpenAiResponsesProvider.ParseChatGptModels(JsonValue.Obj("data", JsonValue.Arr(JsonValue.Obj("id", "standard-model"))));
+            Check("chatgpt_model_catalog_order_visibility_and_schema", catalog.Count == 2 && catalog[0].Id == "preferred" &&
+                catalog[0].DisplayName == "Preferred" && catalog[1].Id == "second" && compatible.Count == 1 && compatible[0].Id == "standard-model");
+
+            var chatModels = OpenAiResponsesProvider.ParseChatGptModels(JsonValue.Obj("models", JsonValue.Arr(
+                JsonValue.Obj("slug", "gpt-5-chat", "display_name", "GPT-5 chat", "visibility", "list"),
+                JsonValue.Obj("slug", "gpt-6-codex", "display_name", "GPT-6 Codex", "visibility", "list"),
+                JsonValue.Obj("slug", "gpt-6", "display_name", "GPT-6", "visibility", "list"),
+                JsonValue.Obj("slug", "gpt-6-pro", "display_name", "GPT-6 Pro", "visibility", "list"),
+                JsonValue.Obj("slug", "gpt-6-hidden", "visibility", "hide"),
+                JsonValue.Obj("slug", "coding-route", "display_name", "Codex", "visibility", "list"))));
+            Check("chatgpt_chat_catalog_excludes_codex_and_retains_visible_gpt6", chatModels.Count == 3 && chatModels[0].Id == "gpt-5-chat" && chatModels[1].Id == "gpt-6" && chatModels[2].Id == "gpt-6-pro");
+            Check("chatgpt_default_prefers_available_gpt6_without_inventing_access", OpenAiResponsesProvider.PreferredChatModel(chatModels) == "gpt-6" &&
+                OpenAiResponsesProvider.PreferredChatModel(compatible) == "standard-model" && OpenAiResponsesProvider.PreferredChatModel(new List<ModelInfo>()) == null);
+            var rejectedCodex = ProviderFactory.Create(BridgeSettings.ProviderChatGpt).StreamTurnAsync(new LlmRequest { Model = "gpt-6-codex" }, evt => { }, CancellationToken.None);
+            while (!rejectedCodex.IsCompleted) yield return null;
+            Check("chatgpt_direct_route_never_executes_a_codex_model", rejectedCodex.IsFaulted && rejectedCodex.Exception.GetBaseException().Message.Contains("separate Codex connection"));
+
+            bool modes = ChatService.ToolsForMode("chat").Count == 0 &&
+                !ChatService.ToolsForMode("plan").Exists(t => t.Name == "propose_file_changes" || t.Name == "save_scene") &&
+                ChatService.ToolsForMode("agent").Exists(t => t.Name == "propose_file_changes");
+            Check("chat_modes_offer_correct_tools", modes);
+
+            // A model must not bypass Chat/Plan by inventing a write tool call.
+            var provider = new ScriptedProvider();
+            provider.Turns.Enqueue(new ProviderTurn { ToolCalls = new List<ToolCall> {
+                new ToolCall { Id = "blocked", Name = "propose_file_changes", Arguments = "{}" } } });
+            provider.Turns.Enqueue(new ProviderTurn { Text = "No write tools are available." });
+            bool blocked = false;
+            var transcript = new List<LlmMessage>();
+            var modeTask = Task.Run(async () => await AgentRunner.RunAsync(provider,
+                new LlmRequest { Model = "scripted", Tools = ChatService.ToolsForMode("plan") }, transcript,
+                e => { if (e.Kind == StreamEventKind.ToolCallResult && !e.ToolOk) blocked = true; }, CancellationToken.None));
+            while (!modeTask.IsCompleted) yield return null;
+            Check("agent_rejects_unoffered_tools", !modeTask.IsFaulted && blocked && transcript.Count == 3 && transcript[1].Content.Contains("not available"));
+
+            var interrupted = new List<LlmMessage> {
+                new LlmMessage { Role = "user", Content = "Inspect" },
+                new LlmMessage { Role = "assistant", ToolCalls = new List<ToolCall> {
+                    new ToolCall { Id = "done", Name = "project_summary" }, new ToolCall { Id = "cancelled", Name = "inspect_scene" } } },
+                new LlmMessage { Role = "tool", ToolCallId = "done", Content = "Actual result" }
+            };
+            ChatService.RepairInterruptedToolCalls(interrupted);
+            ChatService.RepairInterruptedToolCalls(interrupted);
+            Check("interrupted_tool_history_repaired_once", interrupted.Count == 4 && interrupted[2].Content == "Actual result" &&
+                interrupted[3].Role == "tool" && interrupted[3].ToolCallId == "cancelled" && interrupted[3].Content.Contains("interrupted"));
+
+            const string historyProvider = "selftest-tool-boundary";
+            var meta = ChatHistory.NewConversation(historyProvider, "test", "Tool boundary");
+            var history = new List<LlmMessage>();
+            for (int turn = 0; turn < 50; turn++)
+            {
+                history.Add(new LlmMessage { Role = "user", Content = "turn " + turn });
+                history.Add(new LlmMessage { Role = "assistant", ToolCalls = new List<ToolCall> { new ToolCall { Id = "c" + turn, Name = "project_summary" } } });
+                history.Add(new LlmMessage { Role = "tool", ToolCallId = "c" + turn, Content = "result" });
+                history.Add(new LlmMessage { Role = "assistant", Content = "Done" });
+            }
+            // Shift the 120-message boundary into a tool turn.
+            history.Add(new LlmMessage { Role = "user", Content = "next" });
+            ChatHistory.SaveContext(meta, history);
+            var restored = ChatHistory.LoadContext(meta);
+            Check("history_keeps_complete_tool_turns", restored.Count > 0 && restored.Count <= ChatHistory.ContextLimit && restored[0].Role == "user" && restored[restored.Count - 1].Content == "next");
+            ChatHistory.ClearProvider(historyProvider);
+
+            var settings = BridgeSettings.Current;
+            string savedBase = settings.OpenAiBaseUrl;
+            string savedKey = BridgeSettings.Secrets.OpenAiApiKey;
+            using (var server = new LocalTestServer((r, b) => new MockReply { ContentType = "text/event-stream",
+                Body = Sse(JsonValue.Obj("type", "response.output_text.delta", "delta", "Partial")) }))
+            {
+                settings.OpenAiBaseUrl = server.BaseUrl + "/v1";
+                BridgeSettings.Secrets.OpenAiApiKey = "test-key";
+                var incomplete = Task.Run(async () =>
+                {
+                    try { await new OpenAiResponsesProvider(false).StreamTurnAsync(new LlmRequest { Model = "test" }, e => { }, CancellationToken.None); return false; }
+                    catch (BridgeException e) { return e.Message.Contains("before the response completed"); }
+                });
+                while (!incomplete.IsCompleted) yield return null;
+                Check("responses_rejects_truncated_stream", incomplete.Status == TaskStatus.RanToCompletion && incomplete.Result);
+            }
+            settings.OpenAiBaseUrl = savedBase;
+            BridgeSettings.Secrets.OpenAiApiKey = savedKey;
+
+            // Send headers and one event, then stall. Stop must unblock ReadLineAsync.
+            var streamTask = Task.Run(async () =>
+            {
+                using (var listener = new HttpListener())
+                using (var stop = new CancellationTokenSource())
+                {
+                    listener.Prefixes.Add("http://127.0.0.1:7831/"); listener.Start();
+                    var accept = listener.GetContextAsync();
+                    var streaming = StreamingHttp.PostSseAsync("http://127.0.0.1:7831/stream", "{}", null, 20, d => stop.Cancel(), stop.Token);
+                    var context = await accept;
+                    context.Response.ContentType = "text/event-stream";
+                    context.Response.SendChunked = true;
+                    byte[] bytes = Encoding.UTF8.GetBytes("data: hello\n\n");
+                    await context.Response.OutputStream.WriteAsync(bytes, 0, bytes.Length);
+                    await context.Response.OutputStream.FlushAsync();
+                    stop.CancelAfter(150);
+                    var done = await Task.WhenAny(streaming, Task.Delay(3000));
+                    context.Response.Close();
+                    if (done != streaming) throw new Exception("Stop left the stream blocked.");
+                    try { await streaming; throw new Exception("Expected cancellation."); }
+                    catch (OperationCanceledException) { }
+                }
+            });
+            while (!streamTask.IsCompleted) yield return null;
+            Check("stream_stop_unblocks_stalled_read", !streamTask.IsFaulted,
+                streamTask.Exception != null ? streamTask.Exception.GetBaseException().Message : null);
         }
 
         sealed class MockReply

@@ -113,7 +113,7 @@ namespace UnityAIBridge
                 return "Unity AI Bridge exposes this Unity project to ChatGPT. Start with project_summary, then inspect files/scene as needed. " +
                        "Use propose_file_changes (or create_gameobject/update_component/create_prefab/import_sprite) to change the project: these only STAGE changes inside the Unity Editor. " +
                        "A human must review the diff and approve them in Tools > Unity AI Bridge > Pending Changes; then call apply_approved_changes. " +
-                       "Never claim something was applied before apply_approved_changes returns success. All paths are project-relative and must start with Assets/. " +
+                       "Never claim something was applied before apply_approved_changes returns success. Use focus_editor_window when the user asks to open or focus the running Unity Editor. All paths are project-relative and must start with Assets/. " +
                        "Reuse existing scripts and assets. Never ask for API keys or secrets.";
             }
         }
@@ -197,13 +197,13 @@ namespace UnityAIBridge
             tools.Add(new McpTool
             {
                 Name = "list_project_files",
-                Description = "List files inside the Unity project. Use this when you need to discover scripts, prefabs, sprites or folders before editing.",
+                Description = "List files and folders inside the Unity project. Includes matching subfolders even when a folder contains no files. Use this to discover scripts, prefabs, sprites or folder layout before editing.",
                 IsWrite = false,
                 InputSchema = Schema(JsonValue.Obj(
                     "path", Prop("string", "Project-relative folder, e.g. Assets/Scripts. Defaults to Assets."),
                     "recursive", Prop("boolean", "Search subfolders (default true)."),
-                    "extensions", ArrayProp("string", "Optional extension filter, e.g. [\".cs\",\".prefab\"]."),
-                    "max", Prop("integer", "Maximum entries (default 200, hard cap 2000)."))),
+                    "extensions", ArrayProp("string", "Optional extension filter for files, e.g. [\".cs\",\".prefab\"]."),
+                    "max", Prop("integer", "Maximum entries per list (default 200, hard cap 2000)."))),
                 Handler = args =>
                 {
                     string dir = args["path"].AsString("Assets");
@@ -216,37 +216,35 @@ namespace UnityAIBridge
                         foreach (var item in args["extensions"].ArrayValue) list.Add(item.AsString());
                         if (list.Count > 0) extensions = list.ToArray();
                     }
+                    var directories = FileService.ListDirectories(dir, recursive, max);
+                    var folders = JsonValue.NewArray();
+                    foreach (var folder in directories) folders.Add(folder);
                     var files = FileService.ListFiles(dir, recursive, max, extensions);
                     var array = JsonValue.NewArray();
                     foreach (var file in files)
                         array.Add(JsonValue.Obj("path", file.RelativePath, "size", file.Size, "modified", file.ModifiedUtc.ToString("o")));
-                    return JsonValue.Obj("folder", dir, "count", array.Count, "files", array);
+                    return JsonValue.Obj(
+                        "folder", dir,
+                        "count", array.Count,
+                        "files", array,
+                        "directory_count", folders.Count,
+                        "directories", folders);
                 }
             });
 
             tools.Add(new McpTool
             {
                 Name = "read_project_file",
-                Description = "Read a UTF-8 text file (C# script, JSON, prefab YAML, etc.) from inside the project. Use inspect_asset instead for textures/models.",
+                Description = "Read a bounded page of UTF-8 project text, including large files. Use start_line/line_count for exact ranges; follow next_start_line and next_start_column when truncated. Prefer inspect_asset for prefab hierarchy and create_prefab source_asset for prefab reuse; reading YAML is not required.",
                 IsWrite = false,
                 InputSchema = Schema(JsonValue.Obj(
-                    "path", Prop("string", "Project-relative path, e.g. Assets/Scripts/Unit.cs."),
-                    "max_chars", Prop("integer", "Maximum characters to return (default 100000).")),
-                    "path"),
-                Handler = args =>
-                {
-                    string path = args["path"].AsString();
-                    string error;
-                    string text = FileService.ReadText(path, out error, 2 * 1024 * 1024);
-                    if (text == null) return Fail(error);
-                    int maxChars = Mathf.Clamp(args["max_chars"].AsInt(100000), 1000, 400000);
-                    bool truncated = text.Length > maxChars;
-                    return Ok(JsonValue.Obj(
-                        "path", path,
-                        "lines", FileService.CountLines(text),
-                        "truncated", truncated,
-                        "content", truncated ? text.Substring(0, maxChars) : text));
-                }
+                    "path", Prop("string", "Project-relative file path."),
+                    "start_line", Prop("integer", "First line, 1-based (default 1)."),
+                    "start_column", Prop("integer", "Zero-based character within the first line, for long-line continuation (default 0)."),
+                    "line_count", Prop("integer", "Maximum lines to return (default 200, maximum 500)."),
+                    "max_chars", Prop("integer", "Maximum characters in this page (default 6000, maximum 8000).")), "path"),
+                Handler = args => Ok(FileService.ReadTextPage(args["path"].AsString(), args["start_line"].AsInt(1),
+                    args["line_count"].AsInt(200), args["max_chars"].AsInt(6000), args["start_column"].AsInt(0)))
             });
 
             tools.Add(new McpTool
@@ -317,6 +315,50 @@ namespace UnityAIBridge
                     var array = JsonValue.NewArray();
                     foreach (var result in results) array.Add(result);
                     return JsonValue.Obj("applied", results.Count, "results", array);
+                }
+            });
+
+            tools.Add(new McpTool
+            {
+                Name = "request_approval",
+                Description = "Request an in-chat review of specific existing pending changes by ID, for example when the user wants to finish a previously staged task. The chat waits for Accept, Deny, or Comment, then returns the decision and actual change status. Never approve changes on behalf of the user.",
+                IsWrite = false,
+                InputSchema = Schema(JsonValue.Obj("ids", ArrayProp("string", "Specific pending change IDs to present for review.")), "ids"),
+                Handler = args =>
+                {
+                    if (!args["ids"].IsArray || args["ids"].Count == 0) throw new BridgeException("Supply specific pending change IDs.");
+                    var changes = JsonValue.NewArray();
+                    foreach (var item in args["ids"].ArrayValue)
+                    {
+                        var change = ChangeService.Find(item.AsString());
+                        if (change == null || (change.Status != ChangeStatus.Pending && change.Status != ChangeStatus.Approved))
+                            throw new BridgeException("Change is not pending review: " + item.AsString());
+                        changes.Add(JsonValue.Obj("id", change.Id, "title", change.Title, "path", change.TargetPath, "status", change.Status));
+                    }
+                    return JsonValue.Obj("changes", changes, "status", "AwaitingReview");
+                }
+            });
+
+            tools.Add(new McpTool
+            {
+                Name = "discard_pending_changes",
+                Description = "Discard specific obsolete, unapproved proposals by ID when replacing your own failed approach or when the user asks. Does not undo applied changes or discard human-approved changes. Validate IDs with get_pending_changes first.",
+                IsWrite = true,
+                InputSchema = Schema(JsonValue.Obj("ids", ArrayProp("string", "IDs of Pending or Failed changes to discard.")), "ids"),
+                Handler = args =>
+                {
+                    if (!args["ids"].IsArray || args["ids"].Count == 0) throw new BridgeException("Provide at least one pending change ID.");
+                    var changes = new List<BridgeChange>();
+                    foreach (var item in args["ids"].ArrayValue)
+                    {
+                        var change = ChangeService.Find(item.AsString());
+                        if (change == null || (change.Status != ChangeStatus.Pending && change.Status != ChangeStatus.Failed))
+                            throw new BridgeException("Only unapproved Pending or Failed changes can be discarded: " + item.AsString());
+                        changes.Add(change);
+                    }
+                    var discarded = JsonValue.NewArray();
+                    foreach (var change in changes) { ChangeService.Reject(change.Id); discarded.Add(change.Id); }
+                    return JsonValue.Obj("discarded", discarded, "message", "Obsolete proposals discarded. No applied files or scene objects were changed.");
                 }
             });
 
@@ -427,12 +469,15 @@ namespace UnityAIBridge
             tools.Add(new McpTool
             {
                 Name = "create_prefab",
-                Description = "Stage saving a scene GameObject as a prefab (or build a new prefab from a nested 'spec' object). Requires human approval.",
+                Description = "Stage a prefab directly from an existing source_asset prefab, a scene target, or a new spec. For asset reuse use source_asset + path + name + keep_in_scene:true; this creates the prefab and its scene instance on approval, without a setup script.",
                 IsWrite = true,
                 InputSchema = Schema(JsonValue.Obj(
                     "path", Prop("string", "Destination path ending in .prefab."),
-                    "target", Prop("string", "Hierarchy path of the source GameObject."),
-                    "keep_in_scene", Prop("boolean", "For spec-created objects, keep the temporary object in the scene (default false)."),
+                    "source_asset", Prop("string", "Existing project prefab asset to reuse, e.g. Assets/Maps/Level.prefab. Does not require reading its YAML."),
+                    "name", Prop("string", "Name of the new prefab root and optional scene instance. Defaults to the destination filename."),
+                    "remove_missing_scripts", Prop("boolean", "Explicitly remove unresolved script references from a NEW source_asset copy only, when inspect_asset reports missing scripts. Defaults false; original assets and valid scripts are preserved. Does not restore gameplay."),
+                    "target", Prop("string", "Alternatively, hierarchy path of a source scene GameObject."),
+                    "keep_in_scene", Prop("boolean", "For source_asset/spec, also keep an Undo-supported scene instance connected to the NEW prefab (default false)."),
                     "spec", JsonValue.Obj("type", "object", "description", "Optional create_gameobject spec if there is no scene object.")),
                     "path"),
                 Handler = args =>
@@ -560,8 +605,10 @@ namespace UnityAIBridge
                 Name = "inspect_asset",
                 Description = "Inspect an asset's importer, sprite rects, prefab components, material shader/properties or animator states.",
                 IsWrite = false,
-                InputSchema = Schema(JsonValue.Obj("path", Prop("string", "Asset path.")), "path"),
-                Handler = args => Ok(AssetService.InspectAsset(args["path"].AsString()))
+                InputSchema = Schema(JsonValue.Obj("path", Prop("string", "Asset path."),
+                    "depth", Prop("integer", "Prefab hierarchy depth (default 2, maximum 8)."),
+                    "max_nodes", Prop("integer", "Prefab hierarchy node budget (default 60, maximum 200).")), "path"),
+                Handler = args => Ok(AssetService.InspectAsset(args["path"].AsString(), args["depth"].AsInt(2), args["max_nodes"].AsInt(60)))
             });
 
             tools.Add(new McpTool
@@ -582,7 +629,11 @@ namespace UnityAIBridge
                     var errors = JsonValue.NewArray();
                     foreach (var error in ConsoleService.GetErrors(max, warnings))
                         errors.Add(JsonValue.Obj("severity", error.Severity, "time", error.TimeUtc.ToString("o"), "message", error.Message, "stack", Truncate(error.Stack, 4000)));
-                    return JsonValue.Obj("compiler_diagnostics", diagnostics, "console_errors", errors);
+                    return JsonValue.Obj(
+                        "compiling", EditorApplication.isCompiling,
+                        "updating", EditorApplication.isUpdating,
+                        "compiler_diagnostics", diagnostics,
+                        "console_errors", errors);
                 }
             });
 
@@ -598,6 +649,15 @@ namespace UnityAIBridge
                     BridgeLog.Info("mcp", "AssetDatabase.Refresh() requested through MCP.");
                     return JsonValue.Obj("ok", true, "compiling", EditorApplication.isCompiling, "updating", EditorApplication.isUpdating);
                 }
+            });
+
+            tools.Add(new McpTool
+            {
+                Name = "focus_editor_window",
+                Description = "Bring the already-running Unity Editor window to the front and focus it. Use this when the user asks to open, show, or focus the Unity Editor or project.",
+                IsWrite = false,
+                InputSchema = Schema(JsonValue.NewObject()),
+                Handler = args => EditorFocusService.Focus()
             });
 
             tools.Add(new McpTool

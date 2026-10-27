@@ -83,7 +83,7 @@ namespace UnityAIBridge
             return result;
         }
 
-        static JsonValue DescribeNode(GameObject go, int depth, int maxDepth, bool includeComponents, ref int budget)
+        internal static JsonValue DescribeNode(GameObject go, int depth, int maxDepth, bool includeComponents, ref int budget)
         {
             budget--;
             var node = JsonValue.NewObject();

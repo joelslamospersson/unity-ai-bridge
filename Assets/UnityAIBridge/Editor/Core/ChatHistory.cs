@@ -25,6 +25,7 @@ namespace UnityAIBridge
         public string Status;
         public bool Ok = true;
         public string Detail;
+        public string Output;
         public List<string> ChangeIds = new List<string>();
     }
 
@@ -41,6 +42,7 @@ namespace UnityAIBridge
         public int MessageCount;
         public int PageCount;
         public string LastUserText;
+        public bool AutoAcceptAll;
     }
 
     [Serializable]
@@ -324,6 +326,14 @@ namespace UnityAIBridge
                 if (messages != null)
                 {
                     int start = Math.Max(0, messages.Count - ContextLimit);
+                    // Keep complete user turns so function outputs never lose their calls.
+                    if (start > 0 && messages.Exists(m => m != null && m.Role == "user"))
+                    {
+                        int boundary = start;
+                        while (boundary < messages.Count && (messages[boundary] == null || messages[boundary].Role != "user")) boundary++;
+                        if (boundary < messages.Count) start = boundary;
+                        else while (start > 0 && (messages[start] == null || messages[start].Role != "user")) start--;
+                    }
                     for (int i = start; i < messages.Count; i++) context.Messages.Add(messages[i]);
                 }
                 Directory.CreateDirectory(Root(meta));

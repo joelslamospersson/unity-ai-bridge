@@ -38,6 +38,7 @@ namespace UnityAIBridge
 
         void CreateGUI()
         {
+            DetachUi();
             _uiRoot = rootVisualElement;
             _uiRoot.Clear();
             _uiRoot.style.flexGrow = 1;
@@ -52,6 +53,7 @@ namespace UnityAIBridge
 
             _chatPanel = new ChatPanel();
             _chatPanel.PendingRequested += () => SetTab(TabChanges);
+            _chatPanel.AccountRequested += () => SetTab(TabSettings);
             _chatPanel.FileRequested += OnFileRequested;
 
             SetTab(_tab);
@@ -64,6 +66,16 @@ namespace UnityAIBridge
         internal void SelfTestCreateUi()
         {
             CreateGUI();
+        }
+
+        internal void ShowChatAfterSignIn()
+        {
+            SetTab(TabChat);
+            Show();
+            Focus();
+            if (!Application.isBatchMode) EditorFocusService.Focus();
+            RefreshHeader(true);
+            if (_chatPanel != null) _chatPanel.RefreshAll();
         }
 
         internal int SelfTestRootChildren
@@ -100,6 +112,7 @@ namespace UnityAIBridge
             header.style.flexDirection = FlexDirection.Row;
             header.style.alignItems = Align.Center;
             header.style.height = 40;
+            header.style.flexShrink = 0;
             header.style.paddingLeft = 10;
             header.style.paddingRight = 10;
             header.style.backgroundColor = EditorGUIUtility.isProSkin
@@ -118,7 +131,7 @@ namespace UnityAIBridge
             header.Add(_uiBrand);
 
             _uiProvider = new DropdownField(new List<string>(ProviderLabels), 0);
-            _uiProvider.style.width = 138;
+            _uiProvider.style.width = 160;
             _uiProvider.style.marginRight = 6;
             _uiProvider.tooltip = "Inference provider";
             _uiProvider.RegisterValueChangedCallback(evt =>
@@ -178,6 +191,8 @@ namespace UnityAIBridge
         {
             var body = new VisualElement();
             body.style.flexGrow = 1;
+            body.style.flexBasis = 0;
+            body.style.minHeight = 0;
             body.style.flexDirection = FlexDirection.Row;
             _uiRoot.Add(body);
 
@@ -303,6 +318,7 @@ namespace UnityAIBridge
 
             _uiContent = new VisualElement();
             _uiContent.style.flexGrow = 1;
+            _uiContent.style.minHeight = 0;
             _uiContent.style.minWidth = 320;
             body.Add(_uiContent);
         }
@@ -311,6 +327,7 @@ namespace UnityAIBridge
         {
             _uiStatus = new Label();
             _uiStatus.style.height = 22;
+            _uiStatus.style.flexShrink = 0;
             _uiStatus.style.fontSize = 10;
             _uiStatus.style.paddingLeft = 10;
             _uiStatus.style.unityTextAlign = TextAnchor.MiddleLeft;
@@ -388,6 +405,11 @@ namespace UnityAIBridge
             if (_conversationsDirty && EditorApplication.timeSinceStartup - _lastConversationRefresh > 1.0)
                 RefreshConversations();
             RefreshPendingButton();
+            bool idle = !ChatService.IsBusy;
+            if (_uiNewChat != null) _uiNewChat.SetEnabled(idle);
+            if (_uiDelete != null) _uiDelete.SetEnabled(idle);
+            if (_uiClearHistory != null) _uiClearHistory.SetEnabled(idle);
+            if (_historyScroll != null) _historyScroll.SetEnabled(idle);
         }
 
         void RefreshHeader(bool rebuildModels)
@@ -424,6 +446,9 @@ namespace UnityAIBridge
                 if (_uiPermission.index != permission) _uiPermission.index = permission;
             }
             finally { _suppressUi = false; }
+            _uiProvider.SetEnabled(!ChatService.IsBusy);
+            _uiModel.SetEnabled(!ChatService.IsBusy && ChatService.Models.Count > 0 && !ChatService.IsLoadingModels);
+            _uiPermission.SetEnabled(!ChatService.IsBusy);
             _headerDirty = false;
         }
 

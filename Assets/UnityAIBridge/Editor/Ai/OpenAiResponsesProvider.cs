@@ -20,14 +20,14 @@ namespace UnityAIBridge
         }
 
         public string Id { get { return _chatGpt ? BridgeSettings.ProviderChatGpt : BridgeSettings.ProviderOpenAi; } }
-        public string DisplayName { get { return _chatGpt ? "ChatGPT" : "OpenAI API"; } }
+        public string DisplayName { get { return _chatGpt ? "ChatGPT Plus / Pro" : "OpenAI API"; } }
 
         public string BillingNote
         {
             get
             {
                 return _chatGpt
-                    ? "Uses your ChatGPT plan's shared usage limits (no OpenAI API billing). Eligible open-source clients only."
+                    ? "Direct ChatGPT model access using your subscription. OpenAI applies plan and app usage limits; review them with Manage usage."
                     : "Requires a platform.openai.com API key and is billed separately by OpenAI. ChatGPT Plus is not API access.";
             }
         }
@@ -69,22 +69,7 @@ namespace UnityAIBridge
             if (_chatGpt)
             {
                 var json = await ChatGptAuth.GetModelsAsync(cancellationToken).ConfigureAwait(false);
-                if (json["models"].IsArray)
-                {
-                    foreach (var model in json["models"].ArrayValue)
-                    {
-                        string visibility = model["visibility"].AsString();
-                        if (!string.IsNullOrEmpty(visibility) && visibility != "list") continue;
-                        string slug = model["slug"].AsString(model["id"].AsString());
-                        if (string.IsNullOrEmpty(slug)) continue;
-                        result.Add(new ModelInfo
-                        {
-                            Id = slug,
-                            DisplayName = model["display_name"].AsString(slug)
-                        });
-                    }
-                }
-                return result;
+                return ParseChatGptModels(json);
             }
 
             string reason;
@@ -96,7 +81,7 @@ namespace UnityAIBridge
                 foreach (var model in models["data"].ArrayValue)
                 {
                     string id = model["id"].AsString();
-                    if (!string.IsNullOrEmpty(id)) result.Add(new ModelInfo { Id = id, DisplayName = model["name"].AsString(id) });
+                    if (IsTextModel(id)) result.Add(new ModelInfo { Id = id, DisplayName = model["name"].AsString(id) });
                 }
             }
             return result;
@@ -112,6 +97,8 @@ namespace UnityAIBridge
 
         public async Task<ProviderTurn> StreamTurnAsync(LlmRequest request, Action<StreamEvent> onEvent, CancellationToken cancellationToken)
         {
+            if (_chatGpt && IsCodexModel(request.Model))
+                throw new BridgeException("Choose a ChatGPT chat model. Codex models belong to a separate Codex connection.");
             string reason;
             if (!IsConfigured(out reason)) throw new BridgeException(reason);
             try
@@ -162,6 +149,16 @@ namespace UnityAIBridge
                 if (request.Temperature >= 0 && SupportsTemperature(request.Model)) body["temperature"] = request.Temperature;
                 if (request.Tools != null && request.Tools.Count > 0)
                     body["tools"] = BuildToolDefinitions(request.Tools, true);
+            }
+
+            if (SupportsReasoning(request.Model))
+            {
+                var options = JsonValue.Obj("summary", "auto");
+                if (request.Thinking && !string.IsNullOrEmpty(request.ReasoningEffort) && request.ReasoningEffort != "default")
+                    options["effort"] = request.ReasoningEffort;
+                body["reasoning"] = options;
+                // Preserve encrypted reasoning items between stateless tool turns.
+                body["include"] = JsonValue.Arr("reasoning.encrypted_content");
             }
 
             var headers = new Dictionary<string, string> { { "Authorization", "Bearer " + accessToken } };
@@ -302,6 +299,8 @@ namespace UnityAIBridge
             }, cancellationToken).ConfigureAwait(false);
 
             if (!string.IsNullOrEmpty(streamError)) throw new BridgeException(streamError);
+            if (stopReason != "completed")
+                throw new BridgeException("The connection ended before the response completed. You can retry your message.");
 
             var turn = new ProviderTurn
             {
@@ -316,6 +315,56 @@ namespace UnityAIBridge
                 usage.CostText = _chatGpt ? "ChatGPT plan usage" : "OpenAI API (billed by OpenAI)";
             onEvent(new StreamEvent { Kind = StreamEventKind.Usage, Usage = turn.Usage });
             return turn;
+        }
+
+        internal static List<ModelInfo> ParseChatGptModels(JsonValue json)
+        {
+            var result = new List<ModelInfo>();
+            var catalog = json["models"].IsArray ? json["models"] : json["data"];
+            if (catalog.IsArray)
+            {
+                foreach (var model in catalog.ArrayValue)
+                {
+                    string visibility = model["visibility"].AsString();
+                    if (!string.IsNullOrEmpty(visibility) && visibility != "list") continue;
+                    string slug = model["slug"].AsString(model["id"].AsString());
+                    if (string.IsNullOrEmpty(slug) || IsCodexModel(slug, model["display_name"].AsString())) continue;
+                    result.Add(new ModelInfo { Id = slug, DisplayName = model["display_name"].AsString(slug),
+                        ContextWindow = model["context_window"].AsInt(), MaxOutputTokens = model["max_output_tokens"].AsInt() });
+                }
+            }
+            return result;
+        }
+
+        internal static bool IsCodexModel(string id, string displayName = null)
+        {
+            return (id ?? "").IndexOf("codex", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                (displayName ?? "").IndexOf("codex", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        internal static string PreferredChatModel(List<ModelInfo> models)
+        {
+            if (models == null || models.Count == 0) return null;
+            var gpt6 = models.Find(m => m != null && !IsCodexModel(m.Id, m.DisplayName) && (m.Id ?? "").StartsWith("gpt-6", StringComparison.OrdinalIgnoreCase));
+            if (gpt6 != null) return gpt6.Id;
+            var first = models.Find(m => m != null && !IsCodexModel(m.Id, m.DisplayName));
+            return first != null ? first.Id : null;
+        }
+
+        static bool IsTextModel(string model)
+        {
+            string id = (model ?? string.Empty).ToLowerInvariant();
+            if (!(id.StartsWith("gpt-") || id.StartsWith("chatgpt-") || id.StartsWith("o1") || id.StartsWith("o3") || id.StartsWith("o4"))) return false;
+            foreach (var unsupported in new[] { "audio", "realtime", "transcribe", "tts", "image", "search", "instruct" })
+                if (id.Contains(unsupported)) return false;
+            return true;
+        }
+
+        public static bool SupportsReasoning(string model)
+        {
+            string id = (model ?? string.Empty).ToLowerInvariant();
+            return id.StartsWith("gpt-5", StringComparison.Ordinal) || id.StartsWith("gpt-6", StringComparison.Ordinal) ||
+                   id.StartsWith("o3", StringComparison.Ordinal) || id.StartsWith("o4", StringComparison.Ordinal);
         }
 
         static void AddRawItem(List<JsonValue> items, JsonValue item)
@@ -424,7 +473,7 @@ namespace UnityAIBridge
             if (body.IndexOf("subscription_sharing_user_not_eligible", StringComparison.Ordinal) >= 0)
                 return "ChatGPT plan usage is not available for this account, workspace or region. Use the OpenAI API provider or another provider.";
             if (body.IndexOf("subscription_sharing_usage_limit_exceeded", StringComparison.Ordinal) >= 0)
-                return "ChatGPT plan usage limit reached. Check ChatGPT Settings > Usage, or switch providers. This is a shared 5-hour limit on Plus.";
+                return "ChatGPT plan or app usage limit reached. Open Manage usage to review the applicable limit in ChatGPT settings.";
             if (body.IndexOf("subscription_sharing_usage_unavailable", StringComparison.Ordinal) >= 0)
                 return "ChatGPT plan usage availability could not be checked. Try again shortly. " + e.Message;
             if (body.IndexOf("subscription_sharing_unsupported_capability", StringComparison.Ordinal) >= 0)

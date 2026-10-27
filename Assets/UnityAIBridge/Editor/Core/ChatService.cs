@@ -70,8 +70,21 @@ namespace UnityAIBridge
         static CancellationTokenSource _cancellation;
         static CancellationTokenSource _modelCancellation;
         static bool _chatGptSubscribed;
+        static bool _approvalSubscribed;
+        static bool _resumingApproval;
+        static string ContinuationFile { get { return Path.Combine(BridgePaths.LibraryRoot, "chat-continuation.json"); } }
+
+        [Serializable]
+        sealed class ContinuationState
+        {
+            public string Provider;
+            public string ConversationId;
+            public string Model;
+            public string Mode;
+        }
         static List<ModelInfo> _models = new List<ModelInfo>();
         static bool _loadingModels;
+        static int _modelSerial;
         static string _testResult;
         static bool _testing;
 
@@ -108,8 +121,7 @@ namespace UnityAIBridge
         public static void SuspendBackgroundWork()
         {
             Suspended = true;
-            try { if (_modelCancellation != null) _modelCancellation.Cancel(); } catch { }
-            _loadingModels = false;
+            CancelModelRequest();
         }
 
         public static void ResumeBackgroundWork()
@@ -123,6 +135,19 @@ namespace UnityAIBridge
         {
             var handler = Changed;
             if (handler != null) { try { handler(); } catch { } }
+        }
+
+        public static bool ConversationAutoAccept { get { return _meta != null && _meta.AutoAcceptAll; } }
+
+        public static void SetConversationAutoAccept(bool enabled)
+        {
+            if (_meta == null) EnsureLoaded();
+            _meta.AutoAcceptAll = enabled;
+            ChatHistory.SaveMeta(_meta);
+            // Enabling this is also an explicit decision on the current prompt.
+            var pending = ChatApproval.Pending;
+            if (enabled && pending != null) ChatApproval.Resolve(pending.Id, ApprovalChoice.Accept, "", true);
+            Raise();
         }
 
         public static void EnsureLoaded()
@@ -139,6 +164,11 @@ namespace UnityAIBridge
             {
                 _chatGptSubscribed = true;
                 ChatGptAuth.Changed += OnChatGptChanged;
+            }
+            if (!_approvalSubscribed)
+            {
+                _approvalSubscribed = true;
+                ChatApproval.Changed += OnApprovalChanged;
             }
             LoadCachedModels(_activeProvider);
             if (_activeProvider == BridgeSettings.ProviderDeepSeek && _models.Count == 0 && string.IsNullOrEmpty(BridgeSettings.Secrets.DeepSeekApiKey))
@@ -165,6 +195,8 @@ namespace UnityAIBridge
 
         static void OpenMeta(ConversationMeta meta)
         {
+            LastError = null;
+            StatusMessage = "Ready";
             _meta = meta;
             Display.Clear();
             _oldestPage = -1;
@@ -187,7 +219,7 @@ namespace UnityAIBridge
                     draft.Content += "\n\n*Recovered incomplete response.*";
                     Display.Add(draft);
                     ChatHistory.Append(meta, draft);
-                    _transcript.Add(new LlmMessage { Role = "assistant", Content = draft.Content });
+                    if (!File.Exists(ContinuationFile)) _transcript.Add(new LlmMessage { Role = "assistant", Content = draft.Content });
                 }
                 ChatHistory.DeleteStreaming(meta);
             }
@@ -203,6 +235,8 @@ namespace UnityAIBridge
 
         static void CancelActive()
         {
+            ChatApproval.CancelForStop();
+            ClearApprovalContinuation();
             try { if (_cancellation != null) _cancellation.Cancel(); } catch { }
             Interlocked.Increment(ref _runSerial);
             IsBusy = false;
@@ -279,14 +313,25 @@ namespace UnityAIBridge
             Raise();
         }
 
+        public static void UseChatGptPlan(bool reconnect = false)
+        {
+            if (IsBusy) { StatusMessage = "Stop the current response before switching accounts."; Raise(); return; }
+            SwitchProvider(BridgeSettings.ProviderChatGpt);
+            if (ChatGptAuth.IsReadyForInference && !reconnect) RefreshModels(true);
+            else ChatGptAuth.StartSignIn(ChatGptAuth.Status == ChatGptStatus.PlanUsageUnavailable);
+            Raise();
+        }
+
         static void OnChatGptChanged()
         {
             MainThread.Run(() =>
             {
+                if (CurrentProviderId != BridgeSettings.ProviderChatGpt) return;
                 UpdateConnectionFromProvider();
                 if (ChatGptAuth.IsReadyForInference) RefreshModels(false);
                 else if (CurrentProviderId == BridgeSettings.ProviderChatGpt)
                 {
+                    CancelModelRequest();
                     _models = new List<ModelInfo>();
                     if (_meta != null) ChatHistory.SaveMeta(_meta);
                 }
@@ -306,6 +351,8 @@ namespace UnityAIBridge
                 case BridgeSettings.ProviderChatGpt: return settings.ChatGptModel ?? string.Empty;
                 case BridgeSettings.ProviderOpenAi: return settings.OpenAiModel;
                 case BridgeSettings.ProviderOllama: return settings.OllamaModel;
+                case BridgeSettings.ProviderClaude: return settings.ClaudeModel;
+                case BridgeSettings.ProviderGemini: return settings.GeminiModel;
                 default: return string.Empty;
             }
         }
@@ -320,6 +367,8 @@ namespace UnityAIBridge
                 case BridgeSettings.ProviderChatGpt: settings.ChatGptModel = model; break;
                 case BridgeSettings.ProviderOpenAi: settings.OpenAiModel = model; break;
                 case BridgeSettings.ProviderOllama: settings.OllamaModel = model; break;
+                case BridgeSettings.ProviderClaude: settings.ClaudeModel = model; break;
+                case BridgeSettings.ProviderGemini: settings.GeminiModel = model; break;
             }
             BridgeSettings.Save();
         }
@@ -327,6 +376,8 @@ namespace UnityAIBridge
         public static void SelectModel(string model)
         {
             if (string.IsNullOrEmpty(model) || _meta == null) return;
+            if (CurrentProviderId == BridgeSettings.ProviderChatGpt && OpenAiResponsesProvider.IsCodexModel(model))
+            { StatusMessage = "Choose a ChatGPT chat model. Codex uses a separate connection."; Raise(); return; }
             _meta.Model = model;
             PersistModel(CurrentProviderId, model);
             ChatHistory.SaveMeta(_meta);
@@ -341,6 +392,7 @@ namespace UnityAIBridge
 
             BridgeSettings.Current.Provider = provider;
             BridgeSettings.Save();
+            CancelModelRequest();
             _activeProvider = provider;
             _meta = null;
             LoadActiveConversation(provider);
@@ -355,9 +407,19 @@ namespace UnityAIBridge
             Raise();
         }
 
+        static void CancelModelRequest()
+        {
+            Interlocked.Increment(ref _modelSerial);
+            try { if (_modelCancellation != null) _modelCancellation.Cancel(); } catch { }
+            _modelCancellation = null;
+            _loadingModels = false;
+        }
+
         public static void RefreshModels(bool force)
         {
-            if (Suspended || _loadingModels) return;
+            if (Suspended) return;
+            if (_loadingModels && !force) return;
+            if (_loadingModels) CancelModelRequest();
             string providerId = CurrentProviderId;
             var provider = ProviderFactory.Create(providerId);
             if (provider == null)
@@ -377,7 +439,7 @@ namespace UnityAIBridge
             }
 
             string reason = null;
-            bool configured = ChatGptAuth.IsBusy ? false : provider.IsConfigured(out reason);
+            bool configured = provider.IsConfigured(out reason);
             if (!configured)
             {
                 ConnectionState = providerId == BridgeSettings.ProviderChatGpt && ChatGptAuth.IsBusy
@@ -387,6 +449,7 @@ namespace UnityAIBridge
                 if (providerId == BridgeSettings.ProviderDeepSeek) _models = DeepSeekProvider.VerifiedModels();
                 if (providerId == BridgeSettings.ProviderOpenCode) _models = OpenCodeGoProvider.VerifiedModels();
                 if (providerId == BridgeSettings.ProviderChatGpt) _models = new List<ModelInfo>();
+                if (providerId == BridgeSettings.ProviderClaude || providerId == BridgeSettings.ProviderGemini) _models = new List<ModelInfo>();
                 Raise();
                 return;
             }
@@ -394,8 +457,10 @@ namespace UnityAIBridge
             _loadingModels = true;
             ConnectionMessage = "Loading models...";
             string fingerprint = ProviderFingerprint(providerId);
-            _modelCancellation = new CancellationTokenSource();
-            var modelToken = _modelCancellation.Token;
+            int modelRun = Interlocked.Increment(ref _modelSerial);
+            var modelCancellation = new CancellationTokenSource();
+            _modelCancellation = modelCancellation;
+            var modelToken = modelCancellation.Token;
             Raise();
             Task.Run(async () =>
             {
@@ -404,15 +469,17 @@ namespace UnityAIBridge
                     var list = await provider.GetModelsAsync(modelToken).ConfigureAwait(false);
                     MainThread.Run(() =>
                     {
+                        if (modelRun != Volatile.Read(ref _modelSerial)) return;
                         _loadingModels = false;
                         if (CurrentProviderId != providerId || fingerprint != ProviderFingerprint(providerId)) return;
                         _models = list ?? new List<ModelInfo>();
-                        ConnectionState = ProviderConnectionState.Connected;
-                        ConnectionMessage = "Connected · " + _models.Count + " model(s)";
+                        ConnectionState = _models.Count > 0 ? ProviderConnectionState.Ready : ProviderConnectionState.Error;
+                        ConnectionMessage = _models.Count > 0 ? "Account connected · " + _models.Count + " model(s) · send a message to verify access"
+                            : "The account returned no usable chat models. Reconnect or refresh models.";
                         CacheModels(providerId, _models);
                         if (_models.Count > 0 && _meta != null && !_models.Exists(m => m.Id == _meta.Model))
                         {
-                            _meta.Model = _models[0].Id;
+                            _meta.Model = providerId == BridgeSettings.ProviderChatGpt ? OpenAiResponsesProvider.PreferredChatModel(_models) : _models[0].Id;
                             PersistModel(providerId, _meta.Model);
                             ChatHistory.SaveMeta(_meta);
                         }
@@ -423,12 +490,13 @@ namespace UnityAIBridge
                 }
                 catch (OperationCanceledException)
                 {
-                    MainThread.Run(() => { _loadingModels = false; Raise(); });
+                    MainThread.Run(() => { if (modelRun != Volatile.Read(ref _modelSerial)) return; _loadingModels = false; Raise(); });
                 }
                 catch (Exception e)
                 {
                     MainThread.Run(() =>
                     {
+                        if (modelRun != Volatile.Read(ref _modelSerial)) return;
                         _loadingModels = false;
                         if (CurrentProviderId != providerId || fingerprint != ProviderFingerprint(providerId)) return;
                         ConnectionState = ProviderConnectionState.Error;
@@ -457,6 +525,7 @@ namespace UnityAIBridge
                         Raise();
                     });
                 }
+                finally { modelCancellation.Dispose(); }
             });
         }
 
@@ -470,6 +539,8 @@ namespace UnityAIBridge
                 case BridgeSettings.ProviderOpenCode: return settings.OpenCodeBaseUrl + "|" + secrets.OpenCodeApiKey + "|" + settings.OpenCodeModel;
                 case BridgeSettings.ProviderOpenAi: return settings.OpenAiBaseUrl + "|" + secrets.OpenAiApiKey;
                 case BridgeSettings.ProviderOllama: return settings.OllamaUrl + "|" + secrets.OllamaApiKey;
+                case BridgeSettings.ProviderClaude: return settings.ClaudeBaseUrl + "|" + secrets.ClaudeApiKey;
+                case BridgeSettings.ProviderGemini: return settings.GeminiBaseUrl + "|" + secrets.GeminiApiKey;
                 case BridgeSettings.ProviderChatGpt: return secrets.ChatGptClientId + "|" + secrets.ChatGptEmail + "|" + secrets.ChatGptScopes;
                 default: return providerId;
             }
@@ -537,11 +608,21 @@ namespace UnityAIBridge
 
         // ------------------------------------------------------------------ chat
 
-        public static void Send(string text)
+        public static bool Send(string text) { return StartResponse(text, false); }
+
+        public static bool RetryLastResponse()
         {
-            if (IsBusy) return;
+            if (IsBusy || string.IsNullOrEmpty(LastError)) return false;
+            for (int i = _transcript.Count - 1; i >= 0; i--)
+                if (_transcript[i].Role == "user") return StartResponse(_transcript[i].Content, true);
+            return false;
+        }
+
+        static bool StartResponse(string text, bool retry)
+        {
+            if (IsBusy) return false;
             text = (text ?? string.Empty).Trim();
-            if (text.Length == 0) return;
+            if (text.Length == 0) return false;
             EnsureLoaded();
 
             string providerId = CurrentProviderId;
@@ -553,7 +634,7 @@ namespace UnityAIBridge
                 ConnectionState = ProviderConnectionState.NotConfigured;
                 ConnectionMessage = reason;
                 Raise();
-                return;
+                return false;
             }
 
             string model = _meta != null ? _meta.Model : null;
@@ -567,12 +648,15 @@ namespace UnityAIBridge
             {
                 AddDisplay("error", "No model selected. Press the refresh button next to the model dropdown or sign in again.", true);
                 Raise();
-                return;
+                return false;
             }
 
-            var user = new LlmMessage { Role = "user", Content = text };
-            AddDisplay("user", text, false);
-            _transcript.Add(user);
+            if (!retry)
+            {
+                var user = new LlmMessage { Role = "user", Content = text };
+                AddDisplay("user", text, false);
+                _transcript.Add(user);
+            }
             if (_meta != null) ChatHistory.SaveContext(_meta, _transcript);
 
             var assistant = new ChatMessage
@@ -598,6 +682,7 @@ namespace UnityAIBridge
             if (compacted) AddCompactionNotice();
 
             string instructions = BuildInstructions(settings, olderSummary);
+            _attached.Clear();
             var request = new LlmRequest
             {
                 ProviderId = providerId,
@@ -605,14 +690,18 @@ namespace UnityAIBridge
                 Model = model,
                 Instructions = instructions,
                 Messages = modelMessages,
-                Tools = McpTools.GetToolSpecs(Permissions.CanPropose),
+                Tools = ToolsForMode(settings.ChatMode),
                 Temperature = settings.Temperature,
                 MaxOutputTokens = providerId == BridgeSettings.ProviderDeepSeek ? settings.DeepSeekMaxTokens : settings.MaxOutputTokens,
-                Thinking = settings.DeepSeekThinking,
-                ReasoningEffort = settings.DeepSeekReasoningEffort,
+                Thinking = providerId == BridgeSettings.ProviderClaude ? settings.ClaudeThinking : providerId == BridgeSettings.ProviderGemini ? settings.GeminiThinking : providerId == BridgeSettings.ProviderChatGpt || providerId == BridgeSettings.ProviderOpenAi || settings.DeepSeekThinking,
+                ReasoningEffort = providerId == BridgeSettings.ProviderClaude ? settings.ClaudeEffort : providerId == BridgeSettings.ProviderChatGpt || providerId == BridgeSettings.ProviderOpenAi
+                    ? settings.OpenAiReasoningEffort : settings.DeepSeekReasoningEffort,
                 MaxSteps = settings.MaxAgentSteps
             };
 
+            ChatApproval.BeginRun(!retry);
+            request.ToolExecutor = (call, ct) => ChatApproval.ExecuteToolAsync(call, ct, CaptureApprovalContinuation);
+            request.ToolResultCommitted = ChatApproval.ToolResultCommitted;
             int run = Interlocked.Increment(ref _runSerial);
             ResetStreamBuffers();
             _lastFlushUtc = DateTime.UtcNow.AddMilliseconds(-100);
@@ -639,6 +728,16 @@ namespace UnityAIBridge
                     MainThread.Run(() => Failed(e, run, providerId));
                 }
             });
+            return true;
+        }
+
+        internal static List<ToolSpec> ToolsForMode(string mode)
+        {
+            if (mode == "chat") return new List<ToolSpec>();
+            // Read Only still requires a scoped UI grant before a write tool can even stage.
+            var tools = McpTools.GetToolSpecs(mode == "agent");
+            if (mode == "plan") tools.RemoveAll(t => t.Name == "refresh_assets" || t.Name == "focus_editor_window" || t.Name == "request_approval");
+            return tools;
         }
 
         static List<LlmMessage> BuildModelMessages(BridgeSettings settings, out bool compacted, out string olderSummary)
@@ -690,7 +789,10 @@ namespace UnityAIBridge
             if (message == null) return 0;
             int cost = 24;
             if (!string.IsNullOrEmpty(message.Content)) cost += message.Content.Length;
-            if (message.ToolCalls != null) cost += message.ToolCalls.Count * 80;
+            if (!string.IsNullOrEmpty(message.RawItemsJson)) cost += message.RawItemsJson.Length;
+            if (!string.IsNullOrEmpty(message.Reasoning)) cost += message.Reasoning.Length;
+            if (message.ToolCalls != null)
+                foreach (var call in message.ToolCalls) cost += 80 + (call.Arguments == null ? 0 : call.Arguments.Length);
             return cost;
         }
 
@@ -700,13 +802,37 @@ namespace UnityAIBridge
             for (int i = 0; i < start; i++)
             {
                 var message = _transcript[i];
-                if (message == null || message.Role != "user" || string.IsNullOrEmpty(message.Content)) continue;
+                if (message == null || string.IsNullOrEmpty(message.Content)) continue;
                 string text = message.Content.Replace('\n', ' ').Replace('\r', ' ').Trim();
-                if (text.Length > 180) text = text.Substring(0, 180) + "…";
-                lines.Add("- " + text);
+                if (string.IsNullOrEmpty(text)) continue;
+
+                if (message.Role == "user")
+                {
+                    lines.Add("- User: " + Clip(text, 180));
+                }
+                else if (message.Role == "assistant" && (message.ToolCalls == null || message.ToolCalls.Count == 0))
+                {
+                    if (LooksLikeToolMarkup(text)) continue;
+                    // Keep prior conclusions so a follow-up does not restart the investigation.
+                    lines.Add("  Assistant: " + Clip(text, 300));
+                }
             }
-            if (lines.Count > 8) lines.RemoveRange(0, lines.Count - 8);
+            if (lines.Count > 12) lines.RemoveRange(0, lines.Count - 12);
             return string.Join("\n", lines.ToArray());
+        }
+
+        static bool LooksLikeToolMarkup(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+            return text.IndexOf("<｜", StringComparison.Ordinal) >= 0 ||
+                   text.IndexOf("<|tool", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   text.IndexOf("<|function", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   text.IndexOf("invoke name=", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        static string Clip(string text, int max)
+        {
+            return text.Length <= max ? text : text.Substring(0, max) + "…";
         }
 
         static string BuildInstructions(BridgeSettings settings, string olderSummary)
@@ -719,14 +845,34 @@ namespace UnityAIBridge
             builder.Append(PromptBuilder.AgentSystemPrompt(settings));
             builder.Append("\n\n").Append(PromptBuilder.ResponseModeInstruction(settings.ResponseMode));
             builder.Append("\n\nPROJECT CONTEXT\n").Append(context);
+            builder.Append("\n\nCHANGE STATE AT REQUEST START (replaces older transcript state; newer tool results take precedence)\n").Append(BuildChangeStateContext());
             if (!string.IsNullOrEmpty(olderSummary))
-                builder.Append("\n\nOLDER CONVERSATION SUMMARY (the full messages remain in transcript for reference; use this summary to stay oriented)\n").Append(olderSummary);
+                builder.Append("\n\nOLDER CONVERSATION SUMMARY (earlier messages were omitted to save context; rely on this summary for prior findings)\n").Append(olderSummary);
 
             settings.MaxContextCharacters = Mathf.Max(8000, settings.MaxContextCharacters);
             string instructions = builder.ToString();
             if (instructions.Length > settings.MaxContextCharacters + 12000)
                 instructions = instructions.Substring(0, settings.MaxContextCharacters + 12000) + "\n... context truncated ...";
             return instructions;
+        }
+
+        internal static string BuildChangeStateContext()
+        {
+            var recent = JsonValue.NewArray();
+            foreach (var change in ChangeService.All)
+            {
+                if (recent.Count >= 12) break;
+                var entry = JsonValue.Obj("id", change.Id, "kind", change.Kind, "path", change.TargetPath, "status", change.Status);
+                if (change.Kind == ChangeKinds.CreatePrefab)
+                {
+                    entry["source_asset"] = change.Parameters["source_asset"];
+                    entry["keep_in_scene"] = change.Parameters["keep_in_scene"];
+                    entry["remove_missing_scripts"] = change.Parameters["remove_missing_scripts"];
+                }
+                if (!string.IsNullOrEmpty(change.Error)) entry["error"] = Clip(change.Error, 300);
+                recent.Add(entry);
+            }
+            return recent.ToJson(false);
         }
 
         static void AddCompactionNotice()
@@ -922,6 +1068,7 @@ namespace UnityAIBridge
                 activity.Ok = true;
             }
 
+            activity.Detail = FileService.RedactSecrets(call.Arguments);
             string path = ExtractPath(call.Arguments);
             if (!string.IsNullOrEmpty(path) && IsReadTool(call.Name))
             {
@@ -947,6 +1094,7 @@ namespace UnityAIBridge
             activity.Status = evt.ToolOk ? "Done" : "Failed";
             activity.Ok = evt.ToolOk;
             activity.Detail = FileService.RedactSecrets(evt.Text);
+            activity.Output = FileService.RedactSecrets(evt.ToolOutput);
             if (evt.ChangeIds != null)
                 foreach (var id in evt.ChangeIds)
                     if (!activity.ChangeIds.Contains(id)) activity.ChangeIds.Add(id);
@@ -1060,7 +1208,33 @@ namespace UnityAIBridge
             }
             _activeModelMessages = null;
             _activeInitialCount = 0;
-            if (_transcript.Count > 300) _transcript.RemoveRange(0, _transcript.Count - 300);
+            RepairInterruptedToolCalls(_transcript);
+            if (_transcript.Count > 300)
+            {
+                int keepFrom = _transcript.Count - 300;
+                while (keepFrom < _transcript.Count && _transcript[keepFrom].Role != "user") keepFrom++;
+                if (keepFrom < _transcript.Count) _transcript.RemoveRange(0, keepFrom);
+            }
+        }
+
+        internal static void RepairInterruptedToolCalls(List<LlmMessage> transcript)
+        {
+            for (int i = 0; i < transcript.Count; i++)
+            {
+                var message = transcript[i];
+                if (message.Role != "assistant" || message.ToolCalls == null || message.ToolCalls.Count == 0) continue;
+                int end = i + 1;
+                while (end < transcript.Count && transcript[end].Role == "tool") end++;
+                foreach (var call in message.ToolCalls)
+                {
+                    bool found = false;
+                    for (int j = i + 1; j < end; j++) if (transcript[j].ToolCallId == call.Id) { found = true; break; }
+                    if (found) continue;
+                    transcript.Insert(end++, new LlmMessage { Role = "tool", Name = call.Name, ToolCallId = call.Id,
+                        Content = "This tool call was interrupted before a result was recorded. Inspect the current project and pending changes before retrying; do not assume it was applied." });
+                }
+                i = end - 1;
+            }
         }
 
         static void Complete(ProviderTurn turn, string assistantId, int run, string providerId)
@@ -1082,6 +1256,8 @@ namespace UnityAIBridge
                 ChatHistory.Append(_meta, assistant);
             }
 
+            ClearApprovalContinuation();
+            ChatApproval.CancelForStop();
             IsBusy = false;
             _cancellation = null;
             _activeAssistantId = null;
@@ -1117,20 +1293,23 @@ namespace UnityAIBridge
             }
 
             string message = exception is BridgeException ? exception.Message : exception.GetType().Name + ": " + exception.Message;
+            bool agentFailure = exception is AgentException;
             LastError = message;
+            ClearApprovalContinuation();
+            ChatApproval.CancelForStop();
             IsBusy = false;
             _cancellation = null;
             _activeAssistantId = null;
-            StatusMessage = "Error";
-            if (!(exception is OperationCanceledException)) ConnectionState = ProviderConnectionState.Error;
-            AddDisplay("error", "Provider error: " + message, true);
+            StatusMessage = agentFailure ? "Agent error" : "Error";
+            if (!(exception is OperationCanceledException) && !agentFailure) ConnectionState = ProviderConnectionState.Error;
+            AddDisplay("error", (agentFailure ? "Agent error: " : "Provider error: ") + message, true);
             if (_meta != null)
             {
                 ChatHistory.SaveContext(_meta, _transcript);
                 ChatHistory.DeleteStreaming(_meta);
                 ChatHistory.SaveMeta(_meta);
             }
-            BridgeLog.Error("chat", "Provider call failed: " + message);
+            BridgeLog.Error("chat", (agentFailure ? "Agent error: " : "Provider call failed: ") + message);
             Raise();
         }
 
@@ -1148,6 +1327,8 @@ namespace UnityAIBridge
                 if (string.IsNullOrEmpty(assistant.Content) && string.IsNullOrEmpty(assistant.Reasoning)) Display.Remove(assistant);
                 else ChatHistory.Append(_meta, assistant);
             }
+            ClearApprovalContinuation();
+            ChatApproval.CancelForStop();
             IsBusy = false;
             _cancellation = null;
             _activeAssistantId = null;
@@ -1165,6 +1346,8 @@ namespace UnityAIBridge
         public static void Stop()
         {
             if (!IsBusy) return;
+            ChatApproval.CancelForStop();
+            ClearApprovalContinuation();
             StatusMessage = "Stopping...";
             try { if (_cancellation != null) _cancellation.Cancel(); } catch { }
             Raise();
@@ -1184,6 +1367,113 @@ namespace UnityAIBridge
         public static void ContinueAfterApproval()
         {
             Send("I approved and applied the pending changes. Check the Unity console for compilation errors and continue with the task.");
+        }
+
+        static void OnApprovalChanged()
+        {
+            MainThread.Run(() =>
+            {
+                if (ChatApproval.Pending != null) StatusMessage = "Waiting for your review — Accept, Deny, or Comment";
+                else if (IsBusy) StatusMessage = "Continuing after your decision…";
+                Raise();
+            });
+        }
+
+        static void ClearApprovalContinuation()
+        {
+            if (File.Exists(ContinuationFile)) File.Delete(ContinuationFile);
+        }
+
+        static void CaptureApprovalContinuation(bool keep)
+        {
+            if (!keep) { ClearApprovalContinuation(); return; }
+            if (_meta == null) return;
+            if (_activeAssistantId != null) FlushPendingNow(_activeAssistantId);
+            var context = new List<LlmMessage>(_transcript);
+            if (_activeModelMessages != null)
+                for (int i = _activeInitialCount; i < _activeModelMessages.Count; i++) context.Add(_activeModelMessages[i]);
+            ChatHistory.SaveContext(_meta, context);
+            var assistant = _activeAssistantId == null ? null : FindMessage(_activeAssistantId);
+            if (assistant != null) ChatHistory.SaveStreaming(_meta, assistant);
+            var state = new ContinuationState { Provider = CurrentProviderId, ConversationId = _meta.Id, Model = CurrentModel, Mode = BridgeSettings.Current.ChatMode };
+            string temp = ContinuationFile + ".tmp";
+            File.WriteAllText(temp, JsonUtility.ToJson(state));
+            if (File.Exists(ContinuationFile)) File.Replace(temp, ContinuationFile, null);
+            else File.Move(temp, ContinuationFile);
+        }
+
+        public static void PrepareForReload()
+        {
+            if (!IsBusy) return;
+            CaptureApprovalContinuation(true);
+            ChatApproval.PreserveForReload();
+            Interlocked.Increment(ref _runSerial);
+            try { if (_cancellation != null) _cancellation.Cancel(); } catch { }
+            IsBusy = false;
+        }
+
+        public static void ResumeAfterReload()
+        {
+            if (Suspended || _resumingApproval || IsBusy || !File.Exists(ContinuationFile)) return;
+            if (EditorApplication.isCompiling || EditorApplication.isUpdating)
+            { EditorApplication.delayCall += ResumeAfterReload; return; }
+            ContinuationState state;
+            try { state = JsonUtility.FromJson<ContinuationState>(File.ReadAllText(ContinuationFile)); }
+            catch (Exception e) { BridgeLog.Warn("chat", "Could not restore the interrupted conversation: " + e.Message); return; }
+            if (state == null || string.IsNullOrEmpty(state.ConversationId)) return;
+            BridgeSettings.Current.Provider = state.Provider;
+            BridgeSettings.Current.ChatMode = state.Mode;
+            EnsureLoaded();
+            var meta = ChatHistory.LoadMeta(state.Provider, state.ConversationId);
+            if (meta == null) return;
+            OpenMeta(meta);
+            ChatApproval.LoadJournal();
+            var prompt = ChatApproval.Journal;
+            _resumingApproval = true;
+            IsBusy = true;
+            _cancellation = new CancellationTokenSource();
+            var token = _cancellation.Token;
+            int run = Interlocked.Increment(ref _runSerial);
+            StatusMessage = prompt != null ? "Restoring your approval request…" : "Resuming after Unity recompiled…";
+            Raise();
+            Task.Run(async () =>
+            {
+                try
+                {
+                    if (prompt != null)
+                    {
+                        var result = await ChatApproval.ResumeReviewAsync(prompt, token, CaptureApprovalContinuation).ConfigureAwait(false);
+                        MainThread.Invoke(() =>
+                        {
+                            var output = new LlmMessage { Role = "tool", Name = prompt.Tool.Name, ToolCallId = prompt.Tool.Id,
+                                Content = result["structuredContent"].IsObject ? result["structuredContent"].ToJson(false) : result.ToJson(false) };
+                            int existing = _transcript.FindIndex(m => m.Role == "tool" && m.ToolCallId == prompt.Tool.Id);
+                            if (existing >= 0) _transcript[existing] = output;
+                            else
+                            {
+                                int owner = _transcript.FindIndex(m => m.Role == "assistant" && m.ToolCalls != null && m.ToolCalls.Exists(c => c.Id == prompt.Tool.Id));
+                                if (owner >= 0) _transcript.Insert(owner + 1, output);
+                                else _transcript.Add(new LlmMessage { Role = "user", Content = "The user reviewed the pending operation: " + output.Content + " Continue the original task." });
+                            }
+                        });
+                        ChatApproval.ToolResultCommitted();
+                    }
+                    MainThread.Run(() =>
+                    {
+                        if (run != Volatile.Read(ref _runSerial)) return;
+                        RepairInterruptedToolCalls(_transcript);
+                        ChatHistory.SaveContext(_meta, _transcript);
+                        _resumingApproval = false;
+                        IsBusy = false;
+                        _cancellation = null;
+                        StartResponse("Continue the original task using the recorded review decision and current project state.", true);
+                    });
+                }
+                catch (OperationCanceledException)
+                { MainThread.Run(() => { _resumingApproval = false; Cancelled(run, state.Provider); }); }
+                catch (Exception e)
+                { MainThread.Run(() => { _resumingApproval = false; Failed(e, run, state.Provider); }); }
+            });
         }
 
         // ------------------------------------------------------------------ attachments
@@ -1270,6 +1560,8 @@ namespace UnityAIBridge
                 case BridgeSettings.ProviderChatGpt: settings.ChatGptModelsJson = json; break;
                 case BridgeSettings.ProviderOpenAi: settings.OpenAiModelsJson = json; break;
                 case BridgeSettings.ProviderOllama: settings.OllamaModelsJson = json; break;
+                case BridgeSettings.ProviderClaude: settings.ClaudeModelsJson = json; break;
+                case BridgeSettings.ProviderGemini: settings.GeminiModelsJson = json; break;
             }
             BridgeSettings.Save();
         }
@@ -1285,6 +1577,8 @@ namespace UnityAIBridge
                 case BridgeSettings.ProviderChatGpt: json = settings.ChatGptModelsJson; break;
                 case BridgeSettings.ProviderOpenAi: json = settings.OpenAiModelsJson; break;
                 case BridgeSettings.ProviderOllama: json = settings.OllamaModelsJson; break;
+                case BridgeSettings.ProviderClaude: json = settings.ClaudeModelsJson; break;
+                case BridgeSettings.ProviderGemini: json = settings.GeminiModelsJson; break;
             }
             if (string.IsNullOrEmpty(json)) return;
             JsonValue array;
@@ -1302,9 +1596,15 @@ namespace UnityAIBridge
                 };
                 if (item["efforts"].IsArray)
                     foreach (var effort in item["efforts"].ArrayValue) info.EffortLevels.Add(effort.AsString());
-                if (!string.IsNullOrEmpty(info.Id)) result.Add(info);
+                if (!string.IsNullOrEmpty(info.Id) && (provider != BridgeSettings.ProviderChatGpt || !OpenAiResponsesProvider.IsCodexModel(info.Id, info.DisplayName))) result.Add(info);
             }
-            if (result.Count > 0) _models = result;
+            if (result.Count > 0 || provider == BridgeSettings.ProviderChatGpt) _models = result;
+            if (provider == BridgeSettings.ProviderChatGpt && _meta != null && !result.Exists(m => m.Id == _meta.Model))
+            {
+                _meta.Model = OpenAiResponsesProvider.PreferredChatModel(result) ?? string.Empty;
+                PersistModel(provider, _meta.Model);
+                ChatHistory.SaveMeta(_meta);
+            }
         }
 
         public static string ProviderStatusText()

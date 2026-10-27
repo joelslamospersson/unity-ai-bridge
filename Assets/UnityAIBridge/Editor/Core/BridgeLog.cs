@@ -145,8 +145,14 @@ namespace UnityAIBridge
             if (_initialized) return;
             _initialized = true;
             Application.logMessageReceivedThreaded += OnLogMessage;
+            CompilationPipeline.compilationStarted += OnCompilationStarted;
             CompilationPipeline.assemblyCompilationFinished += OnAssemblyCompilationFinished;
             AssemblyReloadEvents.beforeAssemblyReload += ScanEditorLogForCompileErrors;
+        }
+
+        static void OnCompilationStarted(object context)
+        {
+            lock (Gate) Diagnostics.Clear();
         }
 
         static void OnLogMessage(string condition, string stackTrace, LogType type)
@@ -210,10 +216,25 @@ namespace UnityAIBridge
                     {
                         string text = reader.ReadToEnd();
                         string[] lines = text.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+
+                        int lastErrorBlock = -1;
+                        int lastReload = -1;
+                        for (int i = 0; i < lines.Length; i++)
+                        {
+                            if (lines[i].IndexOf("Script Compilation Error", StringComparison.Ordinal) >= 0)
+                                lastErrorBlock = i;
+                            if (lines[i].IndexOf("Reloading assemblies after", StringComparison.Ordinal) >= 0)
+                                lastReload = i;
+                        }
+
+                        // A successful reload after the last error means the diagnostics
+                        // in the tail of the log are stale. Never resurface them.
+                        if (lastErrorBlock < 0 || lastReload > lastErrorBlock) return;
+
                         int added = 0;
                         lock (Gate)
                         {
-                            for (int i = lines.Length - 1; i >= 0 && added < 40; i--)
+                            for (int i = lastErrorBlock; i < lines.Length && added < 40; i++)
                             {
                                 string line = lines[i];
                                 if (line.IndexOf("error CS", StringComparison.Ordinal) < 0) continue;

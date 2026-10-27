@@ -70,43 +70,7 @@ namespace UnityAIBridge
                         }
 
                     case ChangeKinds.CreatePrefab:
-                        {
-                            GameObject source = null;
-                            bool createdTemporary = false;
-                            string targetPath = FirstString(p, "target", "source", "gameobject", "target_path");
-                            if (!string.IsNullOrEmpty(targetPath))
-                            {
-                                source = SceneService.FindByPath(targetPath);
-                                if (source == null) return "Source GameObject not found in the active scene: " + targetPath;
-                            }
-                            else
-                            {
-                                List<string> warnings;
-                                source = SceneService.CreateGameObject(p["spec"], out warnings);
-                                createdTemporary = true;
-                                if (warnings != null && warnings.Count > 0)
-                                    foreach (var warning in warnings) BridgeLog.Warn("prefab", warning);
-                            }
-
-                            if (source == null) return "No GameObject to turn into a prefab.";
-                            if (AssetDatabase.LoadMainAssetAtPath(change.TargetPath) != null)
-                                return "A prefab already exists at " + change.TargetPath + ". It was not overwritten.";
-
-                            string folder = Path.GetDirectoryName(change.TargetPath).Replace('\\', '/');
-                            AssetService.EnsureAssetFolder(folder);
-                            bool success;
-                            var prefab = PrefabUtility.SaveAsPrefabAsset(source, change.TargetPath, out success);
-                            if (!success || prefab == null)
-                                return "Unity could not save the prefab at " + change.TargetPath + ".";
-
-                            bool keepInScene = p["keep_in_scene"].AsBool(false);
-                            if (createdTemporary && !keepInScene) UnityEngine.Object.DestroyImmediate(source);
-                            else if (source.scene.IsValid()) EditorSceneManager.MarkSceneDirty(source.scene);
-
-                            AssetDatabase.SaveAssets();
-                            BridgeLog.Success("prefab", "Created prefab " + change.TargetPath);
-                            return null;
-                        }
+                        return CreatePrefab(change, p);
 
                     case ChangeKinds.CreateMaterial:
                         {
@@ -235,6 +199,80 @@ namespace UnityAIBridge
                     return type;
             }
             return null;
+        }
+
+        static string CreatePrefab(BridgeChange change, JsonValue p)
+        {
+            string destination;
+            string error = Permissions.CheckWrite(change.TargetPath, out destination, false, true);
+            if (error != null) return error;
+            if (File.Exists(destination) || AssetDatabase.LoadMainAssetAtPath(change.TargetPath) != null)
+                return "An asset already exists at " + change.TargetPath + ". It was not overwritten.";
+
+            GameObject source = null;
+            bool temporary = false;
+            bool keep = p["keep_in_scene"].AsBool(false);
+            bool retained = false;
+            try
+            {
+                string assetPath = p["source_asset"].AsString();
+                string target = FirstString(p, "target", "source", "gameobject", "target_path");
+                if (!string.IsNullOrEmpty(assetPath))
+                {
+                    string sourceFull;
+                    error = Permissions.CheckRead(assetPath, out sourceFull);
+                    if (error != null) return error;
+                    assetPath = BridgePaths.ToProjectRelative(sourceFull);
+                    var asset = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+                    if (asset == null || !PrefabUtility.IsPartOfPrefabAsset(asset)) return "Source is not a prefab asset: " + assetPath;
+                    source = PrefabUtility.InstantiatePrefab(asset, SceneService.ActiveScene) as GameObject;
+                    temporary = true;
+                }
+                else if (!string.IsNullOrEmpty(target))
+                {
+                    source = SceneService.FindByPath(target);
+                    if (source == null) return "Source GameObject not found in the active scene: " + target;
+                }
+                else
+                {
+                    List<string> warnings;
+                    source = SceneService.CreateGameObject(p["spec"], out warnings);
+                    temporary = true;
+                    if (warnings != null) foreach (var warning in warnings) BridgeLog.Warn("prefab", warning);
+                }
+                if (source == null) return "No GameObject to turn into a prefab.";
+                if (temporary) source.name = p["name"].AsString(Path.GetFileNameWithoutExtension(change.TargetPath));
+                int missingScripts = AssetService.InspectPrefabScripts(source)["missing_script_count"].AsInt();
+                if (missingScripts > 0)
+                {
+                    if (!temporary || !p["remove_missing_scripts"].AsBool())
+                        return "The source contains " + missingScripts + " missing script reference(s). To clean only a new asset copy, stage source_asset with remove_missing_scripts:true; restore original gameplay scripts separately.";
+                    if (PrefabUtility.IsPartOfPrefabInstance(source))
+                        PrefabUtility.UnpackPrefabInstance(source, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
+                    foreach (var transform in source.GetComponentsInChildren<Transform>(true))
+                        GameObjectUtility.RemoveMonoBehavioursWithMissingScript(transform.gameObject);
+                }
+
+                AssetService.EnsureAssetFolder(Path.GetDirectoryName(change.TargetPath).Replace('\\', '/'));
+                bool success;
+                var prefab = temporary && keep
+                    ? PrefabUtility.SaveAsPrefabAssetAndConnect(source, change.TargetPath, InteractionMode.AutomatedAction, out success)
+                    : PrefabUtility.SaveAsPrefabAsset(source, change.TargetPath, out success);
+                if (!success || prefab == null) return "Unity could not save the prefab at " + change.TargetPath + ".";
+                if (temporary && keep)
+                {
+                    Undo.RegisterCreatedObjectUndo(source, "Add " + source.name + " prefab");
+                    EditorSceneManager.MarkSceneDirty(source.scene);
+                    retained = true;
+                }
+                AssetDatabase.SaveAssets();
+                BridgeLog.Success("prefab", "Created prefab " + change.TargetPath);
+                return null;
+            }
+            finally
+            {
+                if (temporary && !retained && source != null) UnityEngine.Object.DestroyImmediate(source);
+            }
         }
 
         public static string FirstString(JsonValue value, params string[] keys)

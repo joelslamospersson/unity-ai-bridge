@@ -401,7 +401,22 @@ namespace UnityAIBridge
             return true;
         }
 
-        public static JsonValue InspectAsset(string assetPath)
+        internal static JsonValue InspectPrefabScripts(GameObject root)
+        {
+            int missing = 0;
+            var paths = JsonValue.NewArray();
+            foreach (var transform in root.GetComponentsInChildren<Transform>(true))
+            {
+                int count = GameObjectUtility.GetMonoBehavioursWithMissingScriptCount(transform.gameObject);
+                missing += count;
+                if (count > 0 && paths.Count < 12) paths.Add(JsonValue.Obj("path", SceneService.GetPath(transform.gameObject), "missing_scripts", count));
+            }
+            return JsonValue.Obj("missing_script_count", missing, "missing_script_objects", paths,
+                "can_save_prefab", missing == 0,
+                "hint", missing > 0 ? "Unity cannot save a prefab with missing scripts. To make a visual copy, set create_prefab remove_missing_scripts:true. This removes broken references from the new copy only; it does not restore gameplay." : "No missing script references found.");
+        }
+
+        public static JsonValue InspectAsset(string assetPath, int depth = 2, int maxNodes = 60)
         {
             string full;
             string error = Permissions.CheckRead(assetPath, out full);
@@ -486,6 +501,11 @@ namespace UnityAIBridge
                     if (component != null) components.Add(component.GetType().Name);
                 result["components"] = components;
                 result["child_count"] = prefab.transform.childCount;
+                int budget = Mathf.Clamp(maxNodes, 1, 200);
+                result["hierarchy"] = SceneService.DescribeNode(prefab, 0, Mathf.Clamp(depth, 0, 8), true, ref budget);
+                result["hierarchy_truncated"] = budget <= 0;
+                result["validation"] = InspectPrefabScripts(prefab);
+                result["reuse_hint"] = "Use create_prefab with source_asset set to this path, the desired destination path and keep_in_scene:true. No raw YAML read or setup script is needed.";
             }
 
             var material = main as Material;

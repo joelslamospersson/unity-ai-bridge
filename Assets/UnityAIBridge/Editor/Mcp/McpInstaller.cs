@@ -57,7 +57,7 @@ namespace UnityAIBridge
             clients.Add(new McpClient
             {
                 Id = "codex",
-                Name = "Codex CLI",
+                Name = "Codex",
                 Description = "OpenAI Codex CLI (ChatGPT sign-in). Writes ~/.codex/config.toml with a static Authorization header.",
                 Path = System.IO.Path.Combine(home, ".codex", "config.toml"),
                 DocsUrl = "https://developers.openai.com/codex/mcp",
@@ -68,7 +68,7 @@ namespace UnityAIBridge
                 Id = "opencode",
                 Name = "OpenCode",
                 Description = "OpenCode global config. Supports both the v1 direct mcp map and the v2 mcp.servers layout.",
-                Path = System.IO.Path.Combine(xdg, "opencode", "opencode.json"),
+                Path = OpenCodeConfigPath(xdg),
                 DocsUrl = "https://opencode.ai/docs/mcp-servers/",
                 Kind = McpClientKind.OpenCode
             });
@@ -141,14 +141,14 @@ namespace UnityAIBridge
                 if (client.Kind == McpClientKind.CodexToml)
                 {
                     string text = File.ReadAllText(client.Path, Encoding.UTF8);
-                    if (text.IndexOf("[" + SectionName + "]", StringComparison.Ordinal) < 0)
+                    if (!McpToml.ReadServers(text)[ServerName].IsObject)
                         return McpInstallState.NotInstalled;
                     return CompareToml(text) ? McpInstallState.Installed : McpInstallState.InstalledStale;
                 }
 
                 JsonValue root;
                 string error;
-                if (!JsonValue.TryParse(File.ReadAllText(client.Path, Encoding.UTF8), out root, out error) || !root.IsObject)
+                if (!McpConfigSync.TryReadJson(client, File.ReadAllText(client.Path, Encoding.UTF8), out root, out error) || !root.IsObject)
                 {
                     detail = "Config is not valid JSON: " + error;
                     return McpInstallState.ConfigUnreadable;
@@ -193,7 +193,7 @@ namespace UnityAIBridge
                     string existing = File.Exists(client.Path) ? File.ReadAllText(client.Path, Encoding.UTF8) : "{}";
                     JsonValue root;
                     string error;
-                    if (!JsonValue.TryParse(string.IsNullOrWhiteSpace(existing) ? "{}" : existing, out root, out error) || !root.IsObject)
+                    if (!McpConfigSync.TryReadJson(client, string.IsNullOrWhiteSpace(existing) ? "{}" : existing, out root, out error) || !root.IsObject)
                         return "Existing config is not valid JSON; not modified. " + error;
 
                     if (client.Kind == McpClientKind.OpenCode) UpsertOpenCode(root, url, token);
@@ -230,7 +230,7 @@ namespace UnityAIBridge
                 {
                     JsonValue root;
                     string error;
-                    if (!JsonValue.TryParse(File.ReadAllText(client.Path, Encoding.UTF8), out root, out error) || !root.IsObject)
+                    if (!McpConfigSync.TryReadJson(client, File.ReadAllText(client.Path, Encoding.UTF8), out root, out error) || !root.IsObject)
                         return "Config is not valid JSON; not modified.";
                     RemoveJsonEntry(root, client);
                     WritePrivate(client.Path, root.ToJson(true) + "\n");
@@ -348,7 +348,7 @@ namespace UnityAIBridge
                 string trimmed = line.Trim();
                 if (trimmed.StartsWith("[", StringComparison.Ordinal))
                 {
-                    skipping = string.Equals(trimmed, "[" + SectionName + "]", StringComparison.Ordinal);
+                    skipping = McpToml.IsServerTable(line, ServerName);
                     if (skipping) continue;
                 }
                 if (!skipping) output.Add(line);
@@ -395,30 +395,44 @@ namespace UnityAIBridge
 
         // ------------------------------------------------------------------ files
 
-        static void Backup(string path)
+        internal static void Backup(string path)
         {
             if (!File.Exists(path)) return;
             string root = System.IO.Path.Combine(BridgePaths.ConfigRoot, "mcp-backups");
             Directory.CreateDirectory(root);
-            string name = System.IO.Path.GetFileName(path) + "." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff") + ".bak";
+            string name = System.IO.Path.GetFileName(path) + "." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff") + "." + Guid.NewGuid().ToString("N") + ".bak";
             string target = System.IO.Path.Combine(root, name);
             File.Copy(path, target, true);
             BridgePaths.TrySetUnixMode(target, 384);
         }
 
-        static void WritePrivate(string path, string contents)
+        internal static void WritePrivate(string path, string contents)
         {
-            string temp = path + ".unity-ai-bridge.tmp";
-            File.WriteAllText(temp, contents, new UTF8Encoding(false));
-            BridgePaths.TrySetUnixMode(temp, 384);
-            if (File.Exists(path)) File.Delete(path);
-            File.Move(temp, path);
-            BridgePaths.TrySetUnixMode(path, 384);
+            string temp = path + ".unity-ai-bridge-" + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    BridgePaths.TrySetUnixMode(temp, 384);
+                    using (var writer = new StreamWriter(stream, new UTF8Encoding(false))) writer.Write(contents);
+                }
+                if (File.Exists(path)) File.Replace(temp, path, null);
+                else File.Move(temp, path);
+                BridgePaths.TrySetUnixMode(path, 384);
+            }
+            finally { if (File.Exists(temp)) File.Delete(temp); }
         }
 
         static string Home()
         {
             return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        }
+
+        static string OpenCodeConfigPath(string xdg)
+        {
+            string json = System.IO.Path.Combine(xdg, "opencode", "opencode.json");
+            string jsonc = System.IO.Path.Combine(xdg, "opencode", "opencode.jsonc");
+            return !File.Exists(json) && File.Exists(jsonc) ? jsonc : json;
         }
     }
 }

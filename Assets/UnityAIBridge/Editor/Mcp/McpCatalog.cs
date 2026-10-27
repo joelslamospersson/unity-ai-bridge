@@ -30,6 +30,14 @@ namespace UnityAIBridge
         public Dictionary<string, string> Headers = new Dictionary<string, string>();
         public bool OAuth;
         public bool IsStdio;
+        public bool Enabled = true;
+        public Dictionary<string, string> Environment = new Dictionary<string, string>();
+        public Dictionary<string, string> EnvHeaders = new Dictionary<string, string>();
+        public string BearerTokenEnvVar;
+        public JsonValue OAuthConfig;
+        public int TimeoutMs;
+        public int StartupTimeoutMs;
+        public string WorkingDirectory;
     }
 
     /// <summary>
@@ -121,7 +129,7 @@ namespace UnityAIBridge
                 }
                 else if (!string.IsNullOrEmpty(context7Key))
                 {
-                    spec.Headers["Context7-API-Key"] = context7Key;
+                    spec.Headers["Authorization"] = "Bearer " + context7Key;
                 }
             }
             else if (server.Name == "github")
@@ -141,10 +149,10 @@ namespace UnityAIBridge
             try
             {
                 if (client.Kind == McpClientKind.CodexToml)
-                    return File.ReadAllText(client.Path).IndexOf("[" + Section(name) + "]", StringComparison.Ordinal) >= 0;
+                    return McpToml.ReadServers(File.ReadAllText(client.Path))[name].IsObject;
                 JsonValue root;
                 string error;
-                if (!JsonValue.TryParse(File.ReadAllText(client.Path), out root, out error) || !root.IsObject)
+                if (!McpConfigSync.TryReadJson(client, File.ReadAllText(client.Path), out root, out error) || !root.IsObject)
                 {
                     detail = "Config is not valid JSON.";
                     return false;
@@ -171,25 +179,33 @@ namespace UnityAIBridge
             try
             {
                 if (!File.Exists(client.Path)) Directory.CreateDirectory(Path.GetDirectoryName(client.Path));
-                Backup(client.Path);
                 if (client.Kind == McpClientKind.CodexToml)
                 {
                     string text = File.Exists(client.Path) ? File.ReadAllText(client.Path, Encoding.UTF8) : string.Empty;
-                    File.WriteAllText(client.Path, ReplaceToml(text, spec), new UTF8Encoding(false));
+                    string updated = ReplaceToml(text, spec);
+                    McpInstaller.Backup(client.Path);
+                    McpInstaller.WritePrivate(client.Path, updated);
                 }
                 else
                 {
                     string text = File.Exists(client.Path) ? File.ReadAllText(client.Path, Encoding.UTF8) : "{}";
                     JsonValue root;
                     string error;
-                    if (!JsonValue.TryParse(string.IsNullOrWhiteSpace(text) ? "{}" : text, out root, out error) || !root.IsObject)
+                    if (!McpConfigSync.TryReadJson(client, string.IsNullOrWhiteSpace(text) ? "{}" : text, out root, out error) || !root.IsObject)
                         return "Existing config is not valid JSON; not modified. " + error;
 
-                    if (client.Kind == McpClientKind.OpenCode) UpsertOpenCode(root, spec);
-                    else if (client.Kind == McpClientKind.JsonServers) UpsertCollection(root, "servers", spec.Name, Entry(spec, true));
-                    else UpsertCollection(root, "mcpServers", spec.Name, Entry(spec, client.Id == "claudecode"));
+                    var entry = McpConfigSync.JsonEntry(client, spec);
+                    if (client.Kind == McpClientKind.OpenCode)
+                    {
+                        if (!root["mcp"].IsObject) root["mcp"] = JsonValue.NewObject();
+                        var mcp = root["mcp"];
+                        if (mcp["servers"].IsObject) mcp["servers"][spec.Name] = entry;
+                        else mcp[spec.Name] = entry;
+                    }
+                    else UpsertCollection(root, client.Kind == McpClientKind.JsonServers ? "servers" : "mcpServers", spec.Name, entry);
 
-                    File.WriteAllText(client.Path, root.ToJson(true) + "\n", new UTF8Encoding(false));
+                    McpInstaller.Backup(client.Path);
+                    McpInstaller.WritePrivate(client.Path, root.ToJson(true) + "\n");
                 }
                 BridgePaths.TrySetUnixMode(client.Path, 384);
                 BridgeLog.Success("mcp", "Installed " + spec.Name + " into " + client.Name + ".");
@@ -207,17 +223,17 @@ namespace UnityAIBridge
             if (!File.Exists(client.Path)) return null;
             try
             {
-                Backup(client.Path);
+                McpInstaller.Backup(client.Path);
                 if (client.Kind == McpClientKind.CodexToml)
                 {
                     string text = File.ReadAllText(client.Path);
-                    File.WriteAllText(client.Path, RemoveToml(text, name), new UTF8Encoding(false));
+                    McpInstaller.WritePrivate(client.Path, RemoveToml(text, name));
                 }
                 else
                 {
                     JsonValue root;
                     string error;
-                    if (!JsonValue.TryParse(File.ReadAllText(client.Path), out root, out error) || !root.IsObject)
+                    if (!McpConfigSync.TryReadJson(client, File.ReadAllText(client.Path), out root, out error) || !root.IsObject)
                         return "Config is not valid JSON; not modified.";
                     if (client.Kind == McpClientKind.OpenCode)
                     {
@@ -230,7 +246,7 @@ namespace UnityAIBridge
                         string key = client.Kind == McpClientKind.JsonServers ? "servers" : "mcpServers";
                         if (root[key].IsObject) root[key].ObjectValue.Remove(name);
                     }
-                    File.WriteAllText(client.Path, root.ToJson(true) + "\n", new UTF8Encoding(false));
+                    McpInstaller.WritePrivate(client.Path, root.ToJson(true) + "\n");
                 }
                 return null;
             }
@@ -238,20 +254,6 @@ namespace UnityAIBridge
             {
                 return e.Message;
             }
-        }
-
-        static JsonValue Entry(McpServerSpec spec, bool includeType)
-        {
-            if (spec.IsStdio) return JsonValue.Obj("command", spec.Command, "args", JsonValue.Arr(spec.Args));
-            var entry = JsonValue.Obj("url", spec.Url);
-            if (spec.Headers.Count > 0)
-            {
-                var headers = JsonValue.NewObject();
-                foreach (var kv in spec.Headers) headers[kv.Key] = kv.Value;
-                entry["headers"] = headers;
-            }
-            if (includeType) entry["type"] = "http";
-            return entry;
         }
 
         static void UpsertCollection(JsonValue root, string collection, string name, JsonValue entry)
@@ -265,68 +267,66 @@ namespace UnityAIBridge
             target[name] = entry;
         }
 
-        static void UpsertOpenCode(JsonValue root, McpServerSpec spec)
-        {
-            var mcp = root["mcp"];
-            if (!mcp.IsObject)
-            {
-                mcp = JsonValue.NewObject();
-                root["mcp"] = mcp;
-            }
-            JsonValue entry;
-            if (spec.IsStdio)
-            {
-                var command = JsonValue.NewArray();
-                command.Add(spec.Command);
-                foreach (var arg in spec.Args) command.Add(arg);
-                entry = JsonValue.Obj("type", "local", "command", command, "enabled", true);
-            }
-            else
-            {
-                entry = JsonValue.Obj("type", "remote", "url", spec.Url, "enabled", true);
-                if (spec.Headers.Count > 0)
-                {
-                    var headers = JsonValue.NewObject();
-                    foreach (var kv in spec.Headers) headers[kv.Key] = kv.Value;
-                    entry["headers"] = headers;
-                    entry["oauth"] = false;
-                }
-            }
-            if (mcp["servers"].IsObject) mcp["servers"][spec.Name] = entry;
-            else mcp[spec.Name] = entry;
-        }
-
         static string ReplaceToml(string text, McpServerSpec spec)
         {
-            string cleaned = RemoveToml(text, spec.Name);
-            if (!string.IsNullOrEmpty(cleaned) && !cleaned.EndsWith("\n", StringComparison.Ordinal)) cleaned += "\n";
-            if (!string.IsNullOrEmpty(cleaned)) cleaned += "\n";
-            cleaned += "[" + Section(spec.Name) + "]\n";
+            // Validate the existing MCP tables before changing any of them.
+            McpToml.ReadServers(text);
+            if (spec.OAuthConfig != null && spec.OAuthConfig.IsObject && spec.OAuthConfig.Count > 0)
+                throw new BridgeException("Client-specific OAuth options require setup in Codex; this server was not changed.");
+            var client = new McpClient { Kind = McpClientKind.CodexToml };
+            var output = new StringBuilder(RemoveToml(text, spec.Name).TrimEnd());
+            if (output.Length > 0) output.Append("\n\n");
+            output.AppendLine("[mcp_servers." + (System.Text.RegularExpressions.Regex.IsMatch(spec.Name, @"^[A-Za-z0-9_-]+$") ? spec.Name : Quoted(spec.Name)) + "]");
+            output.AppendLine("enabled = " + (spec.Enabled ? "true" : "false"));
             if (spec.IsStdio)
             {
-                cleaned += "command = \"" + Escape(spec.Command) + "\"\n";
+                output.AppendLine("command = " + Quoted(McpConfigSync.Translate(spec.Command, client)));
                 var args = new List<string>();
-                foreach (var arg in spec.Args) args.Add("\"" + Escape(arg) + "\"");
-                cleaned += "args = [" + string.Join(", ", args.ToArray()) + "]\n";
+                foreach (var arg in spec.Args) args.Add(Quoted(McpConfigSync.Translate(arg, client)));
+                output.AppendLine("args = [" + string.Join(", ", args.ToArray()) + "]");
+                AppendMap(output, "env", spec.Environment, client);
             }
             else
             {
-                cleaned += "url = \"" + Escape(spec.Url) + "\"\n";
-                cleaned += "enabled = true\n";
-                if (spec.Headers.Count > 0)
+                output.AppendLine("url = " + Quoted(McpConfigSync.Translate(spec.Url, client)));
+                var staticHeaders = new Dictionary<string, string>();
+                var envHeaders = new Dictionary<string, string>(spec.EnvHeaders);
+                string bearer = spec.BearerTokenEnvVar;
+                foreach (var pair in spec.Headers)
                 {
-                    var pairs = new List<string>();
-                    foreach (var kv in spec.Headers) pairs.Add(kv.Key + " = \"" + Escape(kv.Value) + "\"");
-                    cleaned += "http_headers = { " + string.Join(", ", pairs.ToArray()) + " }\n";
+                    var reference = System.Text.RegularExpressions.Regex.Match(pair.Value, @"^(Bearer )?(?:\{env:([A-Za-z_][A-Za-z0-9_]*)\}|\$\{(?:env:)?([A-Za-z_][A-Za-z0-9_]*)\})$");
+                    if (reference.Success)
+                    {
+                        string variable = reference.Groups[2].Success ? reference.Groups[2].Value : reference.Groups[3].Value;
+                        if (reference.Groups[1].Success && string.Equals(pair.Key, "Authorization", StringComparison.OrdinalIgnoreCase)) bearer = variable;
+                        else if (!reference.Groups[1].Success) envHeaders[pair.Key] = variable;
+                        else staticHeaders[pair.Key] = McpConfigSync.Translate(pair.Value, client);
+                    }
+                    else staticHeaders[pair.Key] = McpConfigSync.Translate(pair.Value, client);
                 }
+                AppendMap(output, "http_headers", staticHeaders, client);
+                AppendMap(output, "env_http_headers", envHeaders, null);
+                if (!string.IsNullOrEmpty(bearer)) output.AppendLine("bearer_token_env_var = " + Quoted(bearer));
             }
-            return cleaned;
+            if (spec.TimeoutMs > 0) output.AppendLine("tool_timeout_sec = " + (spec.TimeoutMs / 1000.0).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (spec.StartupTimeoutMs > 0) output.AppendLine("startup_timeout_sec = " + (spec.StartupTimeoutMs / 1000.0).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (!string.IsNullOrEmpty(spec.WorkingDirectory)) output.AppendLine("cwd = " + Quoted(McpConfigSync.Translate(spec.WorkingDirectory, client)));
+            return output.ToString();
+        }
+
+        static string Quoted(string value) { return JsonValue.Of(value).ToJson(false); }
+
+        static void AppendMap(StringBuilder output, string field, Dictionary<string, string> values, McpClient client)
+        {
+            if (values.Count == 0) return;
+            var pairs = new List<string>();
+            foreach (var pair in values) pairs.Add(Quoted(pair.Key) + " = " + Quoted(client == null ? pair.Value : McpConfigSync.Translate(pair.Value, client)));
+            output.AppendLine(field + " = { " + string.Join(", ", pairs.ToArray()) + " }");
         }
 
         static string RemoveToml(string text, string name)
         {
             if (string.IsNullOrEmpty(text)) return text;
-            string target = "[" + Section(name) + "]";
             var output = new List<string>();
             bool skipping = false;
             foreach (var line in text.Replace("\r\n", "\n").Split('\n'))
@@ -334,7 +334,7 @@ namespace UnityAIBridge
                 string trimmed = line.Trim();
                 if (trimmed.StartsWith("[", StringComparison.Ordinal))
                 {
-                    skipping = string.Equals(trimmed, target, StringComparison.Ordinal);
+                    skipping = McpToml.IsServerTable(line, name);
                     if (skipping) continue;
                 }
                 if (!skipping) output.Add(line);
@@ -343,16 +343,5 @@ namespace UnityAIBridge
         }
 
         static string Section(string name) { return "mcp_servers." + name; }
-        static string Escape(string value) { return (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\""); }
-
-        static void Backup(string path)
-        {
-            if (!File.Exists(path)) return;
-            string root = Path.Combine(BridgePaths.ConfigRoot, "mcp-backups");
-            Directory.CreateDirectory(root);
-            string target = Path.Combine(root, Path.GetFileName(path) + "." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff") + ".bak");
-            File.Copy(path, target, true);
-            BridgePaths.TrySetUnixMode(target, 384);
-        }
     }
 }

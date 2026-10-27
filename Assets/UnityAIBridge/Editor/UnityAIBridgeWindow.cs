@@ -21,8 +21,8 @@ namespace UnityAIBridge
         const int TabLogs = 5;
         static readonly string[] TabNames = { "Chat", "Project", "Changes", "MCP", "Settings", "Logs" };
         static readonly string[] ProjectTabNames = { "Explorer", "Scene", "Assets" };
-        static readonly string[] ProviderIds = { BridgeSettings.ProviderChatGpt, BridgeSettings.ProviderDeepSeek, BridgeSettings.ProviderOpenCode, BridgeSettings.ProviderOpenAi, BridgeSettings.ProviderOllama };
-        static readonly string[] ProviderLabels = { "ChatGPT", "DeepSeek", "OpenCode Go", "OpenAI API", "Ollama (local)" };
+        static readonly string[] ProviderIds = { BridgeSettings.ProviderChatGpt, BridgeSettings.ProviderDeepSeek, BridgeSettings.ProviderOpenCode, BridgeSettings.ProviderOpenAi, BridgeSettings.ProviderOllama, BridgeSettings.ProviderClaude, BridgeSettings.ProviderGemini, BridgeSettings.ProviderClaudeSubscription };
+        static readonly string[] ProviderLabels = { "ChatGPT Plus / Pro", "DeepSeek", "OpenCode Go", "OpenAI API", "Ollama (local)", "Claude API", "Gemini API", "Claude subscription (external)" };
         static readonly string[] LevelLabels = { "Read Only", "Ask Before Editing", "Project Write Access" };
         static readonly string[] ResponseModeLabels = { "Concise", "Balanced", "Detailed" };
         static readonly string[] ResponseModeValues = { "concise", "balanced", "detailed" };
@@ -41,10 +41,10 @@ namespace UnityAIBridge
         bool _showAccountConfig;
         bool _mcpAdvanced;
         bool _mcpCatalogOpen = true;
-        int _mcpCatalogTarget;
-        bool _context7OAuth;
+        int _mcpSyncSource;
         string _context7KeyDraft = string.Empty;
         string _githubTokenDraft = string.Empty;
+        readonly Dictionary<string, string> _nativeApiDrafts = new Dictionary<string, string>();
         int _chatRenderStart = -1;
         string _chatRenderProvider;
         bool _chatAtTopArmed;
@@ -1537,6 +1537,12 @@ namespace UnityAIBridge
         void DrawMcp()
         {
             var settings = BridgeSettings.Current;
+            DrawChatGptPlanEntry();
+            if (!string.IsNullOrEmpty(_feedback))
+            {
+                EditorGUILayout.HelpBox(_feedback, _feedbackError ? MessageType.Warning : MessageType.Info);
+                if (GUILayout.Button("Dismiss", EditorStyles.miniButton, GUILayout.Width(66f))) _feedback = string.Empty;
+            }
             using (var scroll = new EditorGUILayout.ScrollViewScope(_mcpScroll, GUILayout.ExpandHeight(true)))
             {
                 _mcpScroll = scroll.scrollPosition;
@@ -1599,12 +1605,14 @@ namespace UnityAIBridge
                 }
 
                 EditorGUILayout.Space(10f);
-                EditorGUILayout.LabelField("Install in an MCP client", EditorStyles.boldLabel);
+                EditorGUILayout.LabelField("MCP clients", EditorStyles.boldLabel);
                 EditorGUILayout.HelpBox(
-                    "One click merges the Unity AI Bridge entry into the selected client config. It writes the local bearer token to that file (chmod 600) and backs up the previous file. Restart the client afterwards.",
+                    "Select the clients that should share MCP servers and keys. Install and Save & apply use this same selection. Existing servers are preserved and changed configs are backed up. Restart clients after applying.",
                     MessageType.None);
 
+                DrawMcpTargetActions();
                 foreach (var client in McpInstaller.Clients()) DrawMcpClientRow(client);
+                DrawMcpSync();
 
                 EditorGUILayout.Space(10f);
                 _mcpCatalogOpen = EditorGUILayout.Foldout(_mcpCatalogOpen, "Add other MCP servers (Context7, GitHub, Unity MCP, Blender, Playwright)", true);
@@ -1616,6 +1624,25 @@ namespace UnityAIBridge
             }
         }
 
+        void DrawChatGptPlanEntry()
+        {
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.LabelField("ChatGPT Plus / Pro", EditorStyles.boldLabel);
+                GUILayout.Label(ChatGptAuth.IsReadyForInference ? "Using ChatGPT plan · " + ChatGptAuth.AccountLabel : "Use your ChatGPT subscription in the Unity chat. Sign in, allow plan usage, and return to Unity.", EditorStyles.wordWrappedMiniLabel);
+                using (new EditorGUILayout.HorizontalScope())
+                using (new EditorGUI.DisabledScope(ChatService.IsBusy))
+                {
+                    if (GUILayout.Button(ChatGptAuth.IsBusy ? "Cancel sign-in" : ChatGptAuth.IsReadyForInference ? "Open ChatGPT chat" : "Continue with ChatGPT", GUILayout.Width(185f)))
+                    {
+                        if (ChatGptAuth.IsBusy) ChatGptAuth.CancelSignIn();
+                        else { ChatService.UseChatGptPlan(); _tab = TabChat; }
+                    }
+                    if (ChatGptAuth.HasTokens && GUILayout.Button("Manage usage", EditorStyles.miniButton, GUILayout.Width(110f))) Application.OpenURL(ChatGptAuth.UsageUrl);
+                }
+            }
+        }
+
         void DrawMcpClientRow(McpClient client)
         {
             string detail;
@@ -1624,6 +1651,19 @@ namespace UnityAIBridge
             {
                 using (new EditorGUILayout.HorizontalScope())
                 {
+                    if (client.CanInstall)
+                    {
+                        var settings = BridgeSettings.Current;
+                        if (settings.McpTargetClients == null) settings.McpTargetClients = new List<string>();
+                        bool selected = settings.McpTargetClients.Contains(client.Id);
+                        bool next = GUILayout.Toggle(selected, new GUIContent("", "Include this client in shared installs, key updates and sync."), GUILayout.Width(18f));
+                        if (next != selected)
+                        {
+                            if (next) settings.McpTargetClients.Add(client.Id);
+                            else settings.McpTargetClients.Remove(client.Id);
+                            BridgeSettings.Save();
+                        }
+                    }
                     GUILayout.Label(client.Name, EditorStyles.boldLabel, GUILayout.Width(130f));
                     Color color = new Color(0.65f, 0.65f, 0.65f);
                     string stateText = "Not installed";
@@ -1706,121 +1746,162 @@ namespace UnityAIBridge
             }
         }
 
-        void DrawMcpCatalog()
+        void DrawMcpTargetActions()
         {
-            var clients = McpInstaller.Clients().FindAll(c => c.CanInstall);
-            if (clients.Count == 0)
-            {
-                EditorGUILayout.HelpBox("No supported client configs were found.", MessageType.Warning);
-                return;
-            }
-            _mcpCatalogTarget = Mathf.Clamp(_mcpCatalogTarget, 0, clients.Count - 1);
-            var names = new string[clients.Count];
-            for (int i = 0; i < clients.Count; i++) names[i] = clients[i].Name;
             using (new EditorGUILayout.HorizontalScope())
             {
-                GUILayout.Label("Install into:", EditorStyles.miniLabel, GUILayout.Width(68f));
-                _mcpCatalogTarget = EditorGUILayout.Popup(_mcpCatalogTarget, names, GUILayout.Width(160f));
-                GUILayout.Label(clients[_mcpCatalogTarget].Path, EditorStyles.miniLabel);
+                if (GUILayout.Button("Select all", EditorStyles.miniButton, GUILayout.Width(80f)))
+                {
+                    BridgeSettings.Current.McpTargetClients = McpInstaller.Clients().FindAll(c => c.CanInstall).ConvertAll(c => c.Id);
+                    BridgeSettings.Save();
+                }
+                if (GUILayout.Button("Select none", EditorStyles.miniButton, GUILayout.Width(80f)))
+                {
+                    BridgeSettings.Current.McpTargetClients = new List<string>();
+                    BridgeSettings.Save();
+                }
+                GUILayout.FlexibleSpace();
+                var targets = McpConfigSync.SelectedClients();
+                using (new EditorGUI.DisabledScope(targets.Count == 0))
+                {
+                    if (GUILayout.Button("Install / update Unity Bridge in selected clients", EditorStyles.miniButton, GUILayout.Width(310f)))
+                    {
+                        if (McpServer.Current == null || !McpServer.Current.IsRunning) McpServer.StartFromSettings();
+                        if (McpServer.Current == null || !McpServer.Current.IsRunning) SetFeedback("Start the MCP server before installing clients.", true);
+                        else
+                        {
+                            var result = McpConfigSync.Apply(targets, new McpServerSpec { Name = McpInstaller.ServerName, Url = McpInstaller.ServerUrl(), Headers = new Dictionary<string, string> { { "Authorization", "Bearer " + McpInstaller.ServerToken() } } });
+                            SetFeedback(result.Summary, !result.Ok);
+                        }
+                    }
+                }
             }
-            var target = clients[_mcpCatalogTarget];
-            EditorGUILayout.HelpBox("Adds the selected server to " + target.Name + " only. Existing servers remain untouched; a backup is created and the file is chmod 600. Restart the client after installing.", MessageType.None);
-
-            foreach (var server in McpCatalog.Servers()) DrawMcpCatalogServer(server, target);
         }
 
-        void DrawMcpCatalogServer(McpCatalogServer server, McpClient target)
+        void DrawMcpSync()
         {
-            string detail;
-            bool installed = McpCatalog.IsInstalled(target, server.Name, out detail);
+            var clients = McpInstaller.Clients().FindAll(c => c.CanInstall);
+            if (clients.Count == 0) return;
+            _mcpSyncSource = Mathf.Clamp(_mcpSyncSource, 0, clients.Count - 1);
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.LabelField("Sync existing MCP setups", EditorStyles.boldLabel);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Label("Sync from", GUILayout.Width(70f));
+                    _mcpSyncSource = EditorGUILayout.Popup(_mcpSyncSource, clients.ConvertAll(c => c.Name).ToArray(), GUILayout.Width(150f));
+                    var source = clients[_mcpSyncSource];
+                    var targets = McpConfigSync.SelectedClients().FindAll(c => c.Id != source.Id);
+                    using (new EditorGUI.DisabledScope(targets.Count == 0 || !File.Exists(source.Path)))
+                    {
+                        if (GUILayout.Button("Sync to selected clients", EditorStyles.miniButton, GUILayout.Width(180f)))
+                        {
+                            var result = McpConfigSync.Sync(source, targets);
+                            SetFeedback(result.Summary, !result.Ok);
+                        }
+                    }
+                }
+                GUILayout.Label("Copies server entries, API keys, headers, commands and environment settings. Matching server names are updated; other destination servers are kept. OAuth sign-in is completed in each client.", EditorStyles.wordWrappedMiniLabel);
+            }
+        }
+
+        void DrawMcpCatalog()
+        {
+            var targets = McpConfigSync.SelectedClients();
+            EditorGUILayout.HelpBox(targets.Count == 0 ? "Select clients above to install servers and apply keys." : "Shared targets: " + string.Join(", ", targets.ConvertAll(c => c.Name).ToArray()) + ". Save & apply stores the key and updates these clients immediately.", MessageType.None);
+            foreach (var server in McpCatalog.Servers()) DrawMcpCatalogServer(server, targets);
+        }
+
+        void DrawMcpCatalogServer(McpCatalogServer server, List<McpClient> targets)
+        {
+            int installed = 0;
+            var errors = new List<string>();
+            foreach (var target in targets)
+            {
+                string detail;
+                if (McpCatalog.IsInstalled(target, server.Name, out detail)) installed++;
+                if (!string.IsNullOrEmpty(detail)) errors.Add(target.Name + ": " + detail);
+            }
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     GUILayout.Label(server.DisplayName, EditorStyles.boldLabel, GUILayout.Width(160f));
-                    GUI.contentColor = installed ? new Color(0.45f, 0.85f, 0.55f) : new Color(0.65f, 0.65f, 0.65f);
-                    GUILayout.Label(installed ? "Installed in " + target.Name : "Not installed", EditorStyles.miniLabel, GUILayout.Width(160f));
-                    GUI.contentColor = Color.white;
+                    GUILayout.Label(installed + " / " + targets.Count + " selected clients", EditorStyles.miniLabel);
                     GUILayout.FlexibleSpace();
-                    if (GUILayout.Button(installed ? "Reinstall" : "Install", EditorStyles.miniButton, GUILayout.Width(70f)))
-                        InstallMcpCatalogServer(server, target);
-                    using (new EditorGUI.DisabledScope(!installed))
+                    using (new EditorGUI.DisabledScope(targets.Count == 0))
                     {
-                        if (GUILayout.Button("Remove", EditorStyles.miniButton, GUILayout.Width(64f)))
+                        if (GUILayout.Button("Install / update selected", EditorStyles.miniButton, GUILayout.Width(170f))) ApplyMcpCatalogServer(server, targets, false);
+                    }
+                    using (new EditorGUI.DisabledScope(installed == 0))
+                    {
+                        if (GUILayout.Button("Remove selected", EditorStyles.miniButton, GUILayout.Width(110f)))
                         {
-                            string error = McpCatalog.Uninstall(target, server.Name);
-                            SetFeedback(error ?? ("Removed " + server.DisplayName + " from " + target.Name + "."), error != null);
+                            var result = new McpBatchResult();
+                            foreach (var target in targets)
+                            {
+                                string detail;
+                                if (!McpCatalog.IsInstalled(target, server.Name, out detail)) continue;
+                                string error = McpCatalog.Uninstall(target, server.Name);
+                                if (error == null) result.Applied++; else result.Errors.Add(target.Name + ": " + error);
+                            }
+                            SetFeedback("Removed " + server.DisplayName + " from " + result.Applied + " client(s)." + (result.Ok ? "" : "\n" + string.Join("\n", result.Errors.ToArray())), !result.Ok);
                         }
                     }
                     if (GUILayout.Button("Docs", EditorStyles.miniButton, GUILayout.Width(48f))) Application.OpenURL(server.DocsUrl);
-                    if (server.Name == "unity-mcp" && GUILayout.Button("Copy package URL", EditorStyles.miniButton, GUILayout.Width(110f)))
-                        EditorGUIUtility.systemCopyBuffer = "https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#main";
                 }
-
                 GUILayout.Label(server.Description, EditorStyles.wordWrappedMiniLabel);
-
                 if (server.Name == "context7")
                 {
-                    using (new EditorGUILayout.HorizontalScope())
+                    bool oauth = EditorGUILayout.ToggleLeft("Use OAuth instead of an API key", BridgeSettings.Current.Context7OAuth);
+                    if (oauth != BridgeSettings.Current.Context7OAuth) { BridgeSettings.Current.Context7OAuth = oauth; BridgeSettings.Save(); }
+                    using (new EditorGUI.DisabledScope(oauth))
                     {
-                        _context7OAuth = GUILayout.Toggle(_context7OAuth, "Use OAuth", EditorStyles.miniButton, GUILayout.Width(90f));
-                        using (new EditorGUI.DisabledScope(_context7OAuth))
-                        {
-                            _context7KeyDraft = EditorGUILayout.PasswordField(_context7KeyDraft, GUILayout.Width(240f));
-                            GUILayout.Label(string.IsNullOrEmpty(BridgeSettings.Secrets.Context7ApiKey) ? "optional API key" : "key saved", EditorStyles.miniLabel);
-                        }
-                        if (GUILayout.Button("Get key", EditorStyles.miniButton, GUILayout.Width(66f)))
-                            Application.OpenURL("https://context7.com/dashboard");
-                        if (!string.IsNullOrEmpty(BridgeSettings.Secrets.Context7ApiKey) && GUILayout.Button("Clear saved", EditorStyles.miniButton, GUILayout.Width(88f)))
-                        {
-                            BridgeSettings.Secrets.Context7ApiKey = string.Empty;
-                            BridgeSettings.SaveSecrets();
-                        }
+                        _context7KeyDraft = EditorGUILayout.PasswordField("API key", _context7KeyDraft);
                     }
-                    EditorGUILayout.LabelField("OAuth uses /mcp/oauth; the client must complete the sign-in. API key uses the Context7-API-Key header.", EditorStyles.miniLabel);
+                    DrawMcpCredentialActions(server, targets, _context7KeyDraft, BridgeSettings.Secrets.Context7ApiKey, "https://context7.com/dashboard");
                 }
                 else if (server.Name == "github")
                 {
-                    using (new EditorGUILayout.HorizontalScope())
-                    {
-                        _githubTokenDraft = EditorGUILayout.PasswordField(_githubTokenDraft, GUILayout.Width(280f));
-                        GUILayout.Label(string.IsNullOrEmpty(BridgeSettings.Secrets.GitHubMcpToken) ? "leave empty for OAuth" : "token saved", EditorStyles.miniLabel);
-                        if (GUILayout.Button("Create token", EditorStyles.miniButton, GUILayout.Width(90f)))
-                            Application.OpenURL("https://github.com/settings/tokens");
-                        if (!string.IsNullOrEmpty(BridgeSettings.Secrets.GitHubMcpToken) && GUILayout.Button("Clear saved", EditorStyles.miniButton, GUILayout.Width(88f)))
-                        {
-                            BridgeSettings.Secrets.GitHubMcpToken = string.Empty;
-                            BridgeSettings.SaveSecrets();
-                        }
-                    }
-                    EditorGUILayout.LabelField("No token installs the OAuth flow; use a PAT only if your client cannot complete OAuth.", EditorStyles.miniLabel);
+                    _githubTokenDraft = EditorGUILayout.PasswordField("Personal access token", _githubTokenDraft);
+                    DrawMcpCredentialActions(server, targets, _githubTokenDraft, BridgeSettings.Secrets.GitHubMcpToken, "https://github.com/settings/tokens");
                 }
-
+                if (server.Name == "unity-mcp" && GUILayout.Button("Copy package URL", EditorStyles.miniButton, GUILayout.Width(140f)))
+                    EditorGUIUtility.systemCopyBuffer = "https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#main";
                 GUILayout.Label(server.SetupNote, EditorStyles.wordWrappedMiniLabel);
-                if (!string.IsNullOrEmpty(detail)) GUILayout.Label(detail, EditorStyles.miniLabel);
+                foreach (var error in errors) EditorGUILayout.HelpBox(error, MessageType.Warning);
             }
         }
 
-        void InstallMcpCatalogServer(McpCatalogServer server, McpClient target)
+        void DrawMcpCredentialActions(McpCatalogServer server, List<McpClient> targets, string draft, string saved, string keyUrl)
         {
-            string context7Key = !string.IsNullOrEmpty(_context7KeyDraft) ? _context7KeyDraft.Trim() : BridgeSettings.Secrets.Context7ApiKey;
-            string githubToken = !string.IsNullOrEmpty(_githubTokenDraft) ? _githubTokenDraft.Trim() : BridgeSettings.Secrets.GitHubMcpToken;
-            if (server.Name == "context7" && !_context7OAuth && !string.IsNullOrEmpty(_context7KeyDraft))
+            using (new EditorGUILayout.HorizontalScope())
             {
-                BridgeSettings.Secrets.Context7ApiKey = context7Key;
-                BridgeSettings.SaveSecrets();
-                _context7KeyDraft = string.Empty;
+                GUILayout.Label(!string.IsNullOrWhiteSpace(draft) ? "Unsaved key" : !string.IsNullOrEmpty(saved) ? "Key saved" : "No saved key", EditorStyles.miniLabel);
+                GUILayout.FlexibleSpace();
+                using (new EditorGUI.DisabledScope(targets.Count == 0))
+                {
+                    if (GUILayout.Button("Save & apply", EditorStyles.miniButton, GUILayout.Width(110f))) ApplyMcpCatalogServer(server, targets, false);
+                    using (new EditorGUI.DisabledScope(string.IsNullOrEmpty(saved) && string.IsNullOrEmpty(draft)))
+                    {
+                        if (GUILayout.Button("Clear & apply", EditorStyles.miniButton, GUILayout.Width(110f))) ApplyMcpCatalogServer(server, targets, true);
+                    }
+                }
+                if (GUILayout.Button("Get key", EditorStyles.miniButton, GUILayout.Width(70f))) Application.OpenURL(keyUrl);
             }
-            if (server.Name == "github" && !string.IsNullOrEmpty(_githubTokenDraft))
-            {
-                BridgeSettings.Secrets.GitHubMcpToken = githubToken;
-                BridgeSettings.SaveSecrets();
-                _githubTokenDraft = string.Empty;
-            }
+        }
 
-            var spec = McpCatalog.BuildSpec(server, _context7OAuth, context7Key, githubToken);
-            string error = McpCatalog.Install(target, spec);
-            SetFeedback(error ?? ("Installed " + server.DisplayName + " in " + target.Name + ". Restart the client."), error != null);
+        void ApplyMcpCatalogServer(McpCatalogServer server, List<McpClient> targets, bool clear)
+        {
+            try
+            {
+                string draft = server.Name == "context7" ? _context7KeyDraft : server.Name == "github" ? _githubTokenDraft : "";
+                var result = McpConfigSync.SaveAndApply(server, draft, clear, BridgeSettings.Current.Context7OAuth, targets);
+                if (server.Name == "context7") _context7KeyDraft = "";
+                if (server.Name == "github") _githubTokenDraft = "";
+                SetFeedback((server.Auth == McpAuthKind.None ? "" : clear ? "Saved key cleared. " : "Settings saved. ") + result.Summary, !result.Ok);
+            }
+            catch (Exception e) { SetFeedback(FileService.RedactSecrets(e.Message), true); }
         }
 
         void DrawMcpAdvanced(BridgeSettings settings)
@@ -1949,6 +2030,7 @@ namespace UnityAIBridge
 
                 EditorGUILayout.Space(10f);
                 EditorGUILayout.LabelField("Provider and model", EditorStyles.boldLabel);
+                DrawChatGptPlanEntry();
                 int providerIndex = Math.Max(0, Array.IndexOf(ProviderIds, ChatService.CurrentProviderId));
                 int newProvider = EditorGUILayout.Popup("Provider", providerIndex, ProviderLabels);
                 if (newProvider != providerIndex) ChatService.SwitchProvider(ProviderIds[newProvider]);
@@ -1959,6 +2041,8 @@ namespace UnityAIBridge
                 else if (ChatService.CurrentProviderId == BridgeSettings.ProviderDeepSeek) DrawDeepSeekSettings();
                 else if (ChatService.CurrentProviderId == BridgeSettings.ProviderOpenCode) DrawOpenCodeSettings();
                 else if (ChatService.CurrentProviderId == BridgeSettings.ProviderOpenAi) DrawOpenAiSettings();
+                else if (ChatService.CurrentProviderId == BridgeSettings.ProviderClaude || ChatService.CurrentProviderId == BridgeSettings.ProviderGemini) DrawNativeApiSettings(ChatService.CurrentProviderId);
+                else if (ChatService.CurrentProviderId == BridgeSettings.ProviderClaudeSubscription) DrawClaudeSubscriptionSettings();
                 else DrawOllamaSettings();
 
                 EditorGUILayout.Space(10f);
@@ -1991,14 +2075,11 @@ namespace UnityAIBridge
                 settings.LogToFile = EditorGUILayout.Toggle("Write bridge log to file", settings.LogToFile);
 
                 EditorGUILayout.Space(10f);
-                EditorGUILayout.LabelField("ChatGPT subscription and API reality", EditorStyles.boldLabel);
+                EditorGUILayout.LabelField("ChatGPT model access and usage", EditorStyles.boldLabel);
                 EditorGUILayout.HelpBox(
-                    "ChatGPT (this provider) uses OpenAI's Sign in with ChatGPT flow for open-source clients. It is real OAuth (PKCE + ID-token validation) and uses ChatGPT plan usage, not an API key.\n\n" +
-                    "• Plus: plan usage shares a 5-hour limit across apps; Pro has no 5-hour limit. Limits are controlled by OpenAI/ChatGPT settings.\n" +
-                    "• It does not provide unlimited API access, and it is not a Codex Work quota.\n" +
-                    "• Eligibility and availability are controlled by OpenAI; if the account/workspace is not eligible, use the OpenAI API provider or another provider.\n" +
-                    "• No browser cookies, scraping or unofficial endpoints are used. The bridge never marks a provider connected unless OAuth and the plan scope actually succeed.\n" +
-                    "• If plan usage is not granted you can still sign in, and the app will say so instead of pretending to be connected.",
+                    "ChatGPT Plus / Pro uses your authorised plan to call the chat models available to your account directly. This provider does not run Codex.\n\n" +
+                    "OpenAI controls plan and app usage limits. Using a direct connection does not guarantee an additional or independent allowance. Plus plan usage has a shared five-hour limit across apps.\n\n" +
+                    "Use Manage usage to review your app access and applicable limits in ChatGPT settings.",
                     MessageType.Info);
                 using (new EditorGUILayout.HorizontalScope())
                 {
@@ -2046,6 +2127,73 @@ namespace UnityAIBridge
                         ChatService.RefreshModels(true);
                 }
             }
+        }
+
+        void DrawNativeApiSettings(string provider)
+        {
+            bool claude = provider == BridgeSettings.ProviderClaude;
+            var settings = BridgeSettings.Current;
+            EditorGUILayout.Space(8f);
+            EditorGUILayout.LabelField(claude ? "Claude API" : "Gemini API", EditorStyles.boldLabel);
+            if (claude) settings.ClaudeBaseUrl = EditorGUILayout.TextField("Base URL", settings.ClaudeBaseUrl);
+            else settings.GeminiBaseUrl = EditorGUILayout.TextField("Base URL", settings.GeminiBaseUrl);
+            string draft; if (!_nativeApiDrafts.TryGetValue(provider, out draft)) draft = "";
+            string saved = claude ? BridgeSettings.Secrets.ClaudeApiKey : BridgeSettings.Secrets.GeminiApiKey;
+            _nativeApiDrafts[provider] = EditorGUILayout.PasswordField(string.IsNullOrEmpty(saved) ? "API key" : "API key (saved)", draft);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(_nativeApiDrafts[provider])))
+                {
+                    if (GUILayout.Button("Save & test", GUILayout.Width(110f)))
+                    {
+                        if (claude) BridgeSettings.Secrets.ClaudeApiKey = _nativeApiDrafts[provider].Trim();
+                        else BridgeSettings.Secrets.GeminiApiKey = _nativeApiDrafts[provider].Trim();
+                        _nativeApiDrafts[provider] = "";
+                        BridgeSettings.Save(); BridgeSettings.SaveSecrets();
+                        ChatService.RefreshModels(true);
+                        SetFeedback("API key saved. Loading account models.");
+                    }
+                }
+                using (new EditorGUI.DisabledScope(string.IsNullOrEmpty(saved)))
+                {
+                    if (GUILayout.Button("Clear key", GUILayout.Width(90f)))
+                    {
+                        if (claude) BridgeSettings.Secrets.ClaudeApiKey = ""; else BridgeSettings.Secrets.GeminiApiKey = "";
+                        BridgeSettings.SaveSecrets(); ChatService.RefreshModels(true); SetFeedback("API key cleared.");
+                    }
+                    if (GUILayout.Button("Test connection", GUILayout.Width(120f))) ChatService.TestConnection();
+                }
+                if (GUILayout.Button("Get API key", GUILayout.Width(100f))) Application.OpenURL(claude ? "https://platform.claude.com/settings/keys" : "https://aistudio.google.com/api-keys");
+            }
+            string model = EditorGUILayout.TextField("Selected model", ChatService.CurrentModel);
+            if (model != ChatService.CurrentModel) ChatService.SelectModel(model);
+            if (claude) settings.ClaudeThinking = EditorGUILayout.Toggle("Extended thinking", settings.ClaudeThinking);
+            else settings.GeminiThinking = EditorGUILayout.Toggle("Include thinking summaries", settings.GeminiThinking);
+            if (!string.IsNullOrEmpty(ChatService.LastTestResult)) EditorGUILayout.HelpBox(ChatService.LastTestResult, MessageType.Info);
+            if (!string.IsNullOrEmpty(ChatService.ConnectionMessage)) EditorGUILayout.HelpBox(ChatService.ConnectionMessage, ChatService.ConnectionState == ProviderConnectionState.Error ? MessageType.Warning : MessageType.None);
+        }
+
+        void DrawClaudeSubscriptionSettings()
+        {
+            EditorGUILayout.LabelField("Claude subscription — official client", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox("Sign in with your subscription in the official Claude Code client. Install the Unity Bridge MCP entry below to give it Unity tools. For chat directly inside this window, select Claude API. Anthropic requires approval for third-party claude.ai OAuth integrations.", MessageType.Info);
+            BridgeSettings.Current.ClaudeExecutable = EditorGUILayout.TextField("Claude executable", BridgeSettings.Current.ClaudeExecutable);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button(ClaudeSubscriptionHandoff.IsBusy ? "Cancel sign-in" : "Sign in to Claude Code", GUILayout.Width(175f)))
+                {
+                    if (ClaudeSubscriptionHandoff.IsBusy) ClaudeSubscriptionHandoff.CancelLogin(); else ClaudeSubscriptionHandoff.Login();
+                }
+                if (GUILayout.Button("Open Claude Code", GUILayout.Width(150f))) ClaudeSubscriptionHandoff.OpenClient();
+                if (GUILayout.Button("Install Claude Code", GUILayout.Width(155f))) Application.OpenURL(ClaudeSubscriptionHandoff.InstallUrl);
+            }
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("Install Unity Bridge for Claude Code", GUILayout.Width(260f))) InstallMcpClient(McpInstaller.Clients().Find(c => c.Id == "claudecode"));
+                if (GUILayout.Button("Use Claude API inside Unity", GUILayout.Width(220f))) ChatService.SwitchProvider(BridgeSettings.ProviderClaude);
+            }
+            if (!string.IsNullOrEmpty(ClaudeSubscriptionHandoff.Status)) EditorGUILayout.HelpBox(ClaudeSubscriptionHandoff.Status, MessageType.Info);
+            if (!string.IsNullOrEmpty(_feedback)) EditorGUILayout.HelpBox(_feedback, _feedbackError ? MessageType.Warning : MessageType.Info);
         }
 
         void DrawChatGptSettings()
