@@ -69,7 +69,7 @@ namespace UnityAIBridge
                         _phase = "Preparing tool"; _detail = evt.ToolCall != null ? evt.ToolCall.Name : ""; break;
                     case StreamEventKind.ToolExecutionStarted:
                         _detail = evt.ToolCall != null ? evt.ToolCall.Name : "";
-                        _phase = IsReadTool(_detail) ? "Reading project" : IsEditTool(_detail) ? "Editing project" : "Running tool";
+                        _phase = _detail == "generate_image" ? "Generating image" : IsReadTool(_detail) ? "Reading project" : IsEditTool(_detail) ? "Editing project" : "Running tool";
                         break;
                     case StreamEventKind.Completed: _phase = "Finalizing"; break;
                     case StreamEventKind.Error: _phase = "Provider error"; break;

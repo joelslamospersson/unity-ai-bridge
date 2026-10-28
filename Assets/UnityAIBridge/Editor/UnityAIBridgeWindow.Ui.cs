@@ -78,6 +78,12 @@ namespace UnityAIBridge
             if (_chatPanel != null) _chatPanel.RefreshAll();
         }
 
+        internal void ShowChanges()
+        {
+            SetTab(TabChanges);
+            Show(); Focus();
+        }
+
         internal int SelfTestRootChildren
         {
             get { return rootVisualElement != null ? rootVisualElement.childCount : -1; }

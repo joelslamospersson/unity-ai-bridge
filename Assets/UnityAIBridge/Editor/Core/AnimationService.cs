@@ -170,13 +170,33 @@ namespace UnityAIBridge
         public static void ValidateController(string path, JsonValue spec)
         {
             NewAssetPath(path, ".controller");
+            var parameters = ControllerParameters(spec);
             Array(spec["states"], "states", 64, true);
             var names = new HashSet<string>(StringComparer.Ordinal);
             foreach (var state in spec["states"].ArrayValue)
             {
                 string name = state["name"].AsString("");
                 if (string.IsNullOrWhiteSpace(name) || name.Contains(".") || name.Contains("/") || !names.Add(name)) throw new BridgeException("State names must be unique, non-empty and contain no slash or dot.");
-                ReadClip(state["clip"].AsString());
+                if (state["blend_tree"].IsObject)
+                {
+                    if (!state["clip"].IsNull) throw new BridgeException("A state accepts either a clip or a blend_tree, not both.");
+                    var tree = state["blend_tree"];
+                    AnimatorControllerParameterType type;
+                    if (!parameters.TryGetValue(tree["parameter"].AsString(""), out type) || type != AnimatorControllerParameterType.Float)
+                        throw new BridgeException("A 1D blend tree requires an existing Float parameter.");
+                    if (tree["type"].AsString("1D") != "1D") throw new BridgeException("Only 1D blend trees are supported.");
+                    Array(tree["children"], "blend_tree children", 32, true);
+                    if (tree["children"].Count < 2) throw new BridgeException("A blend tree needs at least two child clips.");
+                    float previous = float.NegativeInfinity;
+                    foreach (var child in tree["children"].ArrayValue)
+                    {
+                        ReadClip(child["clip"].AsString());
+                        float threshold = Number(child["threshold"], "blend threshold", -1000000, 1000000);
+                        if (threshold <= previous) throw new BridgeException("Blend thresholds must be strictly increasing.");
+                        previous = threshold;
+                    }
+                }
+                else ReadClip(state["clip"].AsString());
             }
             string defaultState = spec["default_state"].AsString(spec["states"][0]["name"].AsString());
             if (!names.Contains(defaultState)) throw new BridgeException("default_state must name one of the controller's states.");
@@ -186,7 +206,54 @@ namespace UnityAIBridge
                 if (!names.Contains(transition["from"].AsString("")) || !names.Contains(transition["to"].AsString(""))) throw new BridgeException("Every transition must reference existing states.");
                 if (!transition["exit_time"].IsNull) Number(transition["exit_time"], "exit_time", 0, 100);
                 if (!transition["duration"].IsNull) Number(transition["duration"], "duration", 0, 10);
+                Array(transition["conditions"], "transition conditions", 16, false);
+                if (!transition["has_exit_time"].AsBool(transition["conditions"].Count == 0) && transition["conditions"].Count == 0)
+                    throw new BridgeException("A transition needs conditions or an exit time.");
+                if (transition["conditions"].IsArray) foreach (var condition in transition["conditions"].ArrayValue) ValidateCondition(condition, parameters);
             }
+        }
+
+        static Dictionary<string, AnimatorControllerParameterType> ControllerParameters(JsonValue spec)
+        {
+            var result = new Dictionary<string, AnimatorControllerParameterType>(StringComparer.Ordinal);
+            Array(spec["parameters"], "parameters", 32, false);
+            if (spec["parameters"].IsArray) foreach (var parameter in spec["parameters"].ArrayValue)
+            {
+                string name = parameter["name"].AsString("");
+                if (string.IsNullOrWhiteSpace(name) || result.ContainsKey(name)) throw new BridgeException("Controller parameter names must be non-empty and unique.");
+                string typeName = parameter["type"].AsString("");
+                AnimatorControllerParameterType type;
+                if ((typeName != "Float" && typeName != "Int" && typeName != "Bool" && typeName != "Trigger") || !Enum.TryParse(typeName, out type))
+                    throw new BridgeException("Parameter type must be Float, Int, Bool or Trigger.");
+                if (!parameter["default"].IsNull)
+                {
+                    if (type == AnimatorControllerParameterType.Float || type == AnimatorControllerParameterType.Int)
+                    {
+                        float value = Number(parameter["default"], "parameter default", -1000000, 1000000);
+                        if (type == AnimatorControllerParameterType.Int && value != Math.Floor(value)) throw new BridgeException("Int parameter default must be an integer.");
+                    }
+                    else if (!parameter["default"].IsBool) throw new BridgeException("Bool/Trigger parameter default must be a boolean.");
+                }
+                result.Add(name, type);
+            }
+            return result;
+        }
+
+        static AnimatorConditionMode ValidateCondition(JsonValue condition, Dictionary<string, AnimatorControllerParameterType> parameters)
+        {
+            AnimatorControllerParameterType type;
+            if (!parameters.TryGetValue(condition["parameter"].AsString(""), out type)) throw new BridgeException("Transition condition references a missing parameter.");
+            string mode = condition["mode"].AsString("");
+            bool allowed = type == AnimatorControllerParameterType.Float ? mode == "Greater" || mode == "Less"
+                : type == AnimatorControllerParameterType.Int ? mode == "Greater" || mode == "Less" || mode == "Equals" || mode == "NotEqual"
+                : type == AnimatorControllerParameterType.Bool ? mode == "If" || mode == "IfNot" : mode == "If";
+            if (!allowed) throw new BridgeException("Condition mode is incompatible with its parameter type.");
+            if (type == AnimatorControllerParameterType.Float || type == AnimatorControllerParameterType.Int)
+            {
+                float threshold = Number(condition["threshold"], "condition threshold", -1000000, 1000000);
+                if (type == AnimatorControllerParameterType.Int && threshold != Math.Floor(threshold)) throw new BridgeException("Int conditions require an integer threshold.");
+            }
+            return (AnimatorConditionMode)Enum.Parse(typeof(AnimatorConditionMode), mode);
         }
 
         public static void CreateController(string path, JsonValue spec)
@@ -199,23 +266,40 @@ namespace UnityAIBridge
             {
                 controller = AnimatorController.CreateAnimatorControllerAtPath(path);
                 if (controller == null) throw new BridgeException("Unity could not create the Animator Controller.");
+                if (spec["parameters"].IsArray) foreach (var entry in spec["parameters"].ArrayValue)
+                {
+                    var parameter = new AnimatorControllerParameter { name = entry["name"].AsString(), type = (AnimatorControllerParameterType)Enum.Parse(typeof(AnimatorControllerParameterType), entry["type"].AsString()),
+                        defaultFloat = (float)entry["default"].AsNumber(), defaultInt = entry["default"].AsInt(), defaultBool = entry["default"].AsBool() };
+                    controller.AddParameter(parameter);
+                }
                 var machine = controller.layers[0].stateMachine;
                 var states = new Dictionary<string, AnimatorState>(StringComparer.Ordinal);
                 foreach (var entry in spec["states"].ArrayValue)
                 {
                     string name = entry["name"].AsString();
                     var state = machine.AddState(name);
-                    state.motion = ReadClip(entry["clip"].AsString());
+                    if (entry["blend_tree"].IsObject)
+                    {
+                        var source = entry["blend_tree"];
+                        var tree = new BlendTree { name = name + " Blend", blendType = BlendTreeType.Simple1D, blendParameter = source["parameter"].AsString(), useAutomaticThresholds = false };
+                        AssetDatabase.AddObjectToAsset(tree, controller);
+                        foreach (var child in source["children"].ArrayValue) tree.AddChild(ReadClip(child["clip"].AsString()), (float)child["threshold"].AsNumber());
+                        state.motion = tree;
+                    }
+                    else state.motion = ReadClip(entry["clip"].AsString());
                     states.Add(name, state);
                 }
                 machine.defaultState = states[spec["default_state"].AsString(spec["states"][0]["name"].AsString())];
                 if (spec["transitions"].IsArray) foreach (var entry in spec["transitions"].ArrayValue)
                 {
                     var transition = states[entry["from"].AsString()].AddTransition(states[entry["to"].AsString()]);
-                    transition.hasExitTime = true;
+                    transition.hasExitTime = entry["has_exit_time"].AsBool(entry["conditions"].Count == 0);
                     transition.exitTime = (float)entry["exit_time"].AsNumber(1);
                     transition.hasFixedDuration = true;
                     transition.duration = (float)entry["duration"].AsNumber(0.1);
+                    if (entry["conditions"].IsArray) foreach (var condition in entry["conditions"].ArrayValue)
+                        transition.AddCondition((AnimatorConditionMode)Enum.Parse(typeof(AnimatorConditionMode), condition["mode"].AsString()),
+                            (float)condition["threshold"].AsNumber(), condition["parameter"].AsString());
                 }
                 EditorUtility.SetDirty(controller);
                 AssetDatabase.SaveAssets();
@@ -247,6 +331,51 @@ namespace UnityAIBridge
             }
             return JsonValue.Obj("length", clip.length, "frame_rate", clip.frameRate, "loop", AnimationUtility.GetAnimationClipSettings(clip).loopTime,
                 "curve_count", bindings.Length, "curves", curves, "sprite_curves", spriteCurves, "truncated", bindings.Length > 64);
+        }
+
+        public static JsonValue DescribeController(AnimatorController controller)
+        {
+            var parameters = JsonValue.NewArray();
+            foreach (var parameter in controller.parameters)
+            {
+                if (parameters.Count >= 32) break;
+                parameters.Add(JsonValue.Obj("name", parameter.name, "type", parameter.type.ToString(), "default_float", parameter.defaultFloat,
+                    "default_int", parameter.defaultInt, "default_bool", parameter.defaultBool));
+            }
+            var states = JsonValue.NewArray();
+            foreach (var layer in controller.layers) foreach (var child in layer.stateMachine.states)
+            {
+                if (states.Count >= 64) break;
+                var state = child.state;
+                var entry = JsonValue.Obj("name", state.name, "layer", layer.name, "default", layer.stateMachine.defaultState == state);
+                var tree = state.motion as BlendTree;
+                if (tree != null)
+                {
+                    var children = JsonValue.NewArray();
+                    foreach (var motion in tree.children)
+                    {
+                        if (children.Count >= 32) break;
+                        children.Add(JsonValue.Obj("clip", AssetDatabase.GetAssetPath(motion.motion), "threshold", motion.threshold));
+                    }
+                    entry["blend_tree"] = JsonValue.Obj("type", tree.blendType.ToString(), "parameter", tree.blendParameter, "children", children);
+                }
+                else entry["clip"] = AssetDatabase.GetAssetPath(state.motion);
+                var transitions = JsonValue.NewArray();
+                foreach (var transition in state.transitions)
+                {
+                    if (transitions.Count >= 128) break;
+                    var conditions = JsonValue.NewArray();
+                    foreach (var condition in transition.conditions)
+                    {
+                        if (conditions.Count >= 16) break;
+                        conditions.Add(JsonValue.Obj("parameter", condition.parameter, "mode", condition.mode.ToString(), "threshold", condition.threshold));
+                    }
+                    transitions.Add(JsonValue.Obj("to", transition.destinationState != null ? transition.destinationState.name : "", "has_exit_time", transition.hasExitTime,
+                        "exit_time", transition.exitTime, "duration", transition.duration, "conditions", conditions));
+                }
+                entry["transitions"] = transitions; states.Add(entry);
+            }
+            return JsonValue.Obj("parameters", parameters, "states", states, "bounded", true);
         }
     }
 }

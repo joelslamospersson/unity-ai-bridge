@@ -1,5 +1,13 @@
 # Testing and results
 
+## Image generation and advanced animation (2.4.0)
+
+**209 self-tests pass** in isolated Unity 6000.6.7f1. New localhost image fixtures verify disabled/invalid requests send no generation, explicit billing consent survives conversation auto acceptance, denial sends no request, request headers/body use the API route, PNGs are staged before import, alpha is configured, destination races preserve existing assets, invalid image payloads are rejected, provider errors redact credentials and send no retry, and cancellation stages no asset. A retained-preview regression covers a destination changing while generation is in flight. Submitted paid requests are not replayed after reload; changed billing options require a new decision.
+
+Advanced animation tests verify parameter defaults, conditional transitions, serialized blend subassets/thresholds, inspection and rejection of invalid parameter/mode combinations, integer thresholds, duplicate names and invalid blend parameters.
+
+Rendered pointer-interaction validation now includes the image-generation form: entering a prompt alone leaves generation disabled, consent enables it, and disabling generation disables it again. It submits no image-generation request. No paid inference, image-quality evaluation, visual timeline, native desktop-input automation or history rewrite is claimed.
+
 ## Activity, animation and interaction validation (2.3.0)
 
 The isolated Unity 6000.6.7f1 suite passes **184 tests, 0 failures**. Added coverage verifies truthful activity phases, monotonic run timers, real transport heartbeats separated from model progress, quiet-provider notices, approval/Stop states, safe retry after heartbeats, animation approval boundaries, interpolation/loop/sample settings, sprite subasset references, controller states/transitions, invalid keys/paths/sources and destination collision protection at apply time.

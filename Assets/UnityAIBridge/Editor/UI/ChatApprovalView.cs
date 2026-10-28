@@ -61,13 +61,14 @@ namespace UnityAIBridge
             _promptId = prompt.Id;
             _requiresDestructive = prompt.Destructive;
             _title.text = prompt.Title;
-            _scope.text = prompt.Kind == "permission" ? "The agent is waiting. This grants permission to propose changes only."
+            _scope.text = prompt.Kind == "image-generation" ? "This request uses the OpenAI API key and incurs API charges. Generation starts only after your decision. Importing the result requires a separate change review."
+                : prompt.Kind == "permission" ? "The agent is waiting. This grants permission to propose changes only."
                 : "The agent is waiting. Accept applies only the changes below; Deny or Comment continues without granting permission.";
             _detail.text = prompt.Detail ?? string.Empty;
             _comment.SetValueWithoutNotify(string.Empty);
             _confirm.SetValueWithoutNotify(false);
             _confirm.style.display = prompt.Destructive ? DisplayStyle.Flex : DisplayStyle.None;
-            _accept.text = prompt.Kind == "permission" ? "Accept" : "Accept & apply";
+            _accept.text = prompt.Kind == "image-generation" ? "Generate (API billing)" : prompt.Kind == "permission" ? "Accept" : "Accept & apply";
             UpdateButtons();
         }
 

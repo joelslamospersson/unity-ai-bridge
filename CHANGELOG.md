@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.4.0 — 2026-10-28
+
+- Added opt-in OpenAI API image generation through a native UI Toolkit preview window and asynchronous `generate_image` tool. Explicit per-request billing consent is required; conversation auto acceptance does not bypass it. Generated PNGs are staged as sprite imports with transparency settings and create-only collision checks.
+- Retain paid previews when a destination becomes unavailable; restage them at another path without another API request. Cancel, provider errors and domain reload never trigger an automatic paid generation retry.
+- Added typed Float/Int/Bool/Trigger parameters, compatible conditional transitions and 1D blend trees to controller authoring, with bounded inspection and validation at staging/apply time.
+- Fixed main-thread exception wrapping so background tool validation surfaces the original error; redact echoed image API credentials.
+- Expanded validation to 209 Unity self-tests plus rendered layout/pointer checks, including image consent controls. All image-generation network checks use localhost mocks; no live paid image request was made.
+- Updated the limitations list to reflect implemented features and moved provider availability and Git history into operational/privacy notes.
+
 ## 2.3.0 — 2026-10-28
 
 - Added a persistent activity panel for waiting, thinking, writing, preparing tools, reading, editing, review and Stop. It shows elapsed time, actual provider data age and last-progress age; heartbeats do not masquerade as model progress. Quiet-provider notices appear after 45 seconds without traffic or progress and do not mislabel approval waits.

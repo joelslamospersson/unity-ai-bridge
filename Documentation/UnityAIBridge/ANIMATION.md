@@ -52,4 +52,12 @@ Apply clip creation first, then call `create_animator_controller`:
 
 State names must be unique. Timed transitions use normalized `exit_time` (default 1 cycle) and a fixed duration in seconds (default 0.1). The controller accepts at most 64 states and 128 transitions. After approval, assign it to an existing Animator with `update_component`, or add an Animator through the existing tools. The controller tool does not modify scene objects automatically.
 
-Existing `.anim` and `.controller` assets are never overwritten by these creation tools. Editing an existing asset, a visual timeline, conditional transitions/parameters, blend trees, humanoid rigging and retargeting remain outside this tool surface. Existing Unity animation tools remain available for those workflows.
+### Parameters, conditions and 1D blend trees
+
+Controllers accept up to 32 `parameters` with `name`, `type` (`Float`, `Int`, `Bool`, `Trigger`) and an optional typed `default`. Numeric values are bounded to ±1,000,000; integer parameters require integer defaults and thresholds.
+
+Each transition may include up to 16 `conditions`. Conditions name a `parameter` and compatible `mode`: Float supports `Greater`/`Less`, Int also supports `Equals`/`NotEqual`, Bool supports `If`/`IfNot`, and Trigger supports `If`. Numeric conditions require `threshold`. Conditions are combined by Unity as an AND requirement. `has_exit_time` defaults to false with conditions and true without them; a transition must have conditions or an exit time.
+
+A state may replace `clip` with `blend_tree`, containing `parameter` (an existing Float parameter), optional `type: "1D"` and 2–32 `children`. Children contain an existing `clip` and strictly increasing `threshold`. The tree is saved as a subasset of its controller; it does not create separate orphan assets. `inspect_asset` returns typed parameters, state motions, blend children and transition conditions within bounded output limits.
+
+Existing `.anim` and `.controller` assets are never overwritten by these creation tools. Editing an existing asset, a visual timeline, 2D/nested blend trees, humanoid rigging and retargeting remain outside this tool surface. Existing Unity animation tools remain available for those workflows.

@@ -10,7 +10,8 @@ It is not affiliated with, endorsed by, or sponsored by Unity Technologies, Open
 
 - **UI Toolkit chat** with growing transcript rows, conversation sidebar, paged history and lazy older-page loading
 - **Live activity indicator** with observed thinking/writing/reading/editing phases, elapsed time, actual last-data and progress ages, approval waits and a quiet-provider notice
-- **Animation authoring** for transform keyframes, sprite-frame clips and Animator Controllers with timed transitions, staged for approval
+- **Image generation** with a native preview window, explicit OpenAI API billing consent, transparent PNG output and staged sprite import
+- **Animation authoring** for transform/sprite clips, typed controller parameters, conditional transitions and 1D blend trees, staged for approval
 - **Responsive streaming** with buffered 10–15 FPS UI updates, periodic crash-recovery checkpoints, Markdown, syntax-highlighted code blocks, file cards and compact tool groups
 - **Token-aware context**: recent turns plus an older-context summary; project context is cached and script source is read through tools instead of being pasted into every request
 - **Response modes** (Concise/Balanced/Detailed) and a separately configurable output-token budget
@@ -88,12 +89,18 @@ Useful example requests:
 
 The assistant is instructed to inspect the project dynamically. It must not assume genre, mechanics, architecture, target platform, render pipeline, input system, package set, or folder layout.
 
+## Generate artwork
+
+Open **Tools → Unity AI Bridge → Generate Image**, or use **Project → Assets → Generate image**. Enable generation, save an OpenAI API key, choose an image model, describe the artwork and authorize API charges for one image. The preview is retained outside Assets; importing it uses the existing change-approval flow. The agent and MCP clients can also call `generate_image`, which requires an explicit in-editor billing decision even with conversation auto acceptance enabled.
+
+Image generation uses OpenAI API billing separately from ChatGPT plan image credits. It sends no automatic paid retries, including after Unity recompilation. A generated preview survives a destination collision and can be imported at a different path without paying for another image. See [image generation](Documentation/UnityAIBridge/IMAGE-GENERATION.md).
+
 ## Project inspection and editing
 
 | Area | Capabilities |
 | --- | --- |
 | Inspect | Project summary, files, scripts, scene hierarchy, components/properties, prefabs, materials, animator controllers, sprite import settings, packages, console and compiler diagnostics |
-| Edit | Text files, folders, GameObjects, components, prefabs, materials, ScriptableObjects, PNG/JPG sprite import, sprite-sheet slicing, sprite assignment, transform and sprite-frame animation clips, Animator Controllers with timed transitions, scene save |
+| Edit | Text files, folders, GameObjects, components, prefabs, materials, ScriptableObjects, PNG/JPG sprite import, sprite-sheet slicing, sprite assignment, transform and sprite-frame animation clips, Animator Controllers with conditions and 1D blend trees, scene save |
 | Reuse | Existing scripts, assets, prefabs, materials and project conventions are inspected before proposing changes |
 
 Write operations are staged as diffs in **Pending Changes**. They require review unless you have enabled the applicable automatic approval setting.
@@ -148,7 +155,7 @@ See [MCP.md](Documentation/UnityAIBridge/MCP.md).
 
 Run **Tools → Unity AI Bridge → Run Self Tests**. The suite covers file and asset operations, sandbox escapes, permission failures, Undo, MCP, provider request/stream parsing, OAuth PKCE/JWT/refresh and the tool loop.
 
-The latest isolated Unity 6000.6.7f1 run passed **184 tests**, and the rendered streaming layout check passed. An additional rendered pointer-interaction suite exercises Stop, destructive confirmation and Accept/Deny/Comment review controls in a rendered Unity window. Claude/Gemini protocol tests use localhost mocks; no live paid inference was performed.
+The latest isolated Unity 6000.6.7f1 run passed **209 tests**, and the rendered streaming layout check passed. An additional rendered pointer-interaction suite exercises Stop, destructive confirmation, Accept/Deny/Comment review controls and image-generation consent/enable controls in rendered Unity windows. Claude/Gemini protocol tests use localhost mocks; no live paid inference was performed.
 
 See [TESTING.md](Documentation/UnityAIBridge/TESTING.md).
 
@@ -165,11 +172,14 @@ Existing installations are migrated automatically:
 
 ## Known limitations
 
-- Image generation is not implemented. The Asset Manager imports and configures existing artwork.
-- Animation tools create transform/sprite keyframe clips and controllers with timed transitions. A visual timeline editor, rig/retargeting tools, blend trees and conditional controller transitions remain outside the current tool surface.
+- Animation tools support transform/sprite clips, typed parameters, conditional transitions and 1D blend trees. A visual timeline editor, rig/retargeting tools, 2D/nested blend-tree authoring and editing existing animation assets remain outside the current tool surface.
 - The chat UI is UI Toolkit, while the Project/Changes/MCP/Settings/Logs tabs are still hosted through `IMGUIContainer`. Automated coverage includes in-memory smoke tests, rendered chat layout and rendered pointer interactions. Pixel-perfect screenshot comparisons and native desktop mouse automation remain untested.
-- Provider features and availability can change. Inactivity deadlines, traffic/progress ages and one bounded timeout retry improve recovery; genuine upstream failures still surface as errors.
-- Historical information in old Git commits is not removed by editing files. See the repository privacy notes in the release summary.
+
+## Operational notes
+
+Provider capabilities and availability are external dependencies. The bridge reports upstream errors and distinguishes them from local inactivity; image-generation requests are never automatically retried. Generation requires image-model access on the configured API account. Protocol and UI tests use localhost fixtures; no live paid image generation was performed for this release.
+
+Repository history is documented separately in [privacy and history](Documentation/UnityAIBridge/PRIVACY.md). This release updates the current tree and does not rewrite prior commits.
 
 ## License
 

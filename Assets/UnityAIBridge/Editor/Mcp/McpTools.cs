@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
 
@@ -21,7 +23,7 @@ namespace UnityAIBridge
     /// </summary>
     public static class McpTools
     {
-        public const string ServerVersion = "2.3.0";
+        public const string ServerVersion = "2.4.0";
 
         static List<McpTool> _tools;
 
@@ -45,6 +47,14 @@ namespace UnityAIBridge
             {
                 return Fail("Tool '" + name + "' failed: " + e.Message);
             }
+        }
+
+        public static async Task<JsonValue> InvokeAsync(string name, JsonValue arguments, CancellationToken token)
+        {
+            if (name != "generate_image") return InvokeFromAnyThread(name, arguments);
+            try { return await ImageGenerationService.GenerateAndStageAsync(arguments ?? JsonValue.NewObject(), token).ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception e) { return Fail(FileService.RedactSecrets(e.Message)); }
         }
 
         public static JsonValue InvokeOnMain(string name, JsonValue arguments)
@@ -585,6 +595,20 @@ namespace UnityAIBridge
 
             tools.Add(new McpTool
             {
+                Name = "generate_image",
+                Description = "Generate one PNG with the separately configured OpenAI API image model. Requires image generation enabled, an API key, and explicit in-editor billing consent even when conversation auto acceptance is on. The resulting sprite import is staged for separate approval. Requests run asynchronously; no automatic paid retry or URL download is performed.",
+                IsWrite = true,
+                InputSchema = Schema(JsonValue.Obj(
+                    "prompt", Prop("string", "Description of the requested artwork, up to 32000 characters."),
+                    "path", Prop("string", "New PNG destination under Assets/. Existing files are never overwritten."),
+                    "size", JsonValue.Obj("type", "string", "enum", JsonValue.Arr("1024x1024", "1536x1024", "1024x1536")),
+                    "quality", JsonValue.Obj("type", "string", "enum", JsonValue.Arr("auto", "low", "medium", "high")),
+                    "background", JsonValue.Obj("type", "string", "enum", JsonValue.Arr("transparent", "opaque", "auto"))), "prompt", "path"),
+                Handler = args => Fail("Image generation requires the asynchronous tools/call route or the Generate Image window.")
+            });
+
+            tools.Add(new McpTool
+            {
                 Name = "create_animation_clip",
                 Description = "Stage a new .anim asset with transform keyframes and/or SpriteRenderer sprite frames. No scripts or animation events execute. Use inspect_asset to find exact sprite subasset names. Times are seconds and strictly increasing; paths are relative to the Animator root. Approve/apply the clip before referencing it in a controller.",
                 IsWrite = true,
@@ -609,17 +633,31 @@ namespace UnityAIBridge
             tools.Add(new McpTool
             {
                 Name = "create_animator_controller",
-                Description = "Stage a new Animator Controller using existing .anim clips, a default state and optional timed transitions. Creates assets after approval; assign the result to an Animator through update_component. Existing controllers are never overwritten. Conditional transitions, parameters and blend trees are not authored by this tool.",
+                Description = "Stage a new Animator Controller with existing clips, Float/Int/Bool/Trigger parameters, typed transition conditions and optional 1D blend trees. Timed transitions remain supported. Creates assets after approval; assign the result through update_component. Existing controllers are never overwritten.",
                 IsWrite = true,
                 InputSchema = Schema(JsonValue.Obj(
                     "path", Prop("string", "New Assets/ path ending in .controller."),
                     "default_state", Prop("string", "Initial state name; defaults to the first state."),
+                    "parameters", JsonValue.Obj("type", "array", "maxItems", 32, "items", Schema(JsonValue.Obj(
+                        "name", Prop("string", "Unique parameter name."),
+                        "type", JsonValue.Obj("type", "string", "enum", JsonValue.Arr("Float", "Int", "Bool", "Trigger")),
+                        "default", JsonValue.Obj("type", JsonValue.Arr("number", "boolean"), "description", "Optional numeric or boolean default matching the parameter type.")), "name", "type")),
                     "states", JsonValue.Obj("type", "array", "minItems", 1, "maxItems", 64, "items", Schema(JsonValue.Obj(
                         "name", Prop("string", "Unique state name without slash or dot."),
-                        "clip", Prop("string", "Existing .anim asset path; apply clip creation first.")), "name", "clip")),
+                        "clip", Prop("string", "Existing .anim asset path; supply this or blend_tree."),
+                        "blend_tree", Schema(JsonValue.Obj(
+                            "type", JsonValue.Obj("type", "string", "enum", JsonValue.Arr("1D")),
+                            "parameter", Prop("string", "Existing Float parameter controlling the blend."),
+                            "children", JsonValue.Obj("type", "array", "minItems", 2, "maxItems", 32, "items", Schema(JsonValue.Obj(
+                                "clip", Prop("string", "Existing clip asset path."), "threshold", Prop("number", "Strictly increasing blend threshold.")), "clip", "threshold"))), "parameter", "children")), "name")),
                     "transitions", JsonValue.Obj("type", "array", "maxItems", 128, "items", Schema(JsonValue.Obj(
                         "from", Prop("string", "Source state name."), "to", Prop("string", "Destination state name."),
                         "exit_time", Prop("number", "Normalized exit time, 0–100; default 1 (one clip cycle)."),
+                        "has_exit_time", Prop("boolean", "Defaults to false with conditions, true without conditions."),
+                        "conditions", JsonValue.Obj("type", "array", "maxItems", 16, "items", Schema(JsonValue.Obj(
+                            "parameter", Prop("string", "Existing controller parameter name."),
+                            "mode", JsonValue.Obj("type", "string", "enum", JsonValue.Arr("If", "IfNot", "Greater", "Less", "Equals", "NotEqual")),
+                            "threshold", Prop("number", "Required for Float/Int comparisons. Bool accepts If/IfNot; Trigger accepts If.")), "parameter", "mode")),
                         "duration", Prop("number", "Blend duration in seconds, 0–10; default 0.1.")), "from", "to"))), "path", "states"),
                 Handler = args => { var action = JsonValue.Parse(args.ToJson(false)); action["type"] = "create_animator_controller"; return StageAction(action); }
             });

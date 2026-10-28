@@ -565,6 +565,9 @@ namespace UnityAIBridge
             while (streamTimeouts.MoveNext()) yield return streamTimeouts.Current;
             RunActivityTests();
             RunAnimationTests();
+            RunAdvancedAnimationTests();
+            var images = RunImageGenerationTests();
+            while (images.MoveNext()) yield return images.Current;
             var activityTransport = RunActivityTransportTests();
             while (activityTransport.MoveNext()) yield return activityTransport.Current;
 

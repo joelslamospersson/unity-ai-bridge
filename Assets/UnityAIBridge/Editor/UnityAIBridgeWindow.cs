@@ -1143,6 +1143,7 @@ namespace UnityAIBridge
                 GUILayout.Label("Folder:", EditorStyles.miniLabel, GUILayout.Width(44f));
                 _assetFolder = EditorGUILayout.TextField(_assetFolder, EditorStyles.toolbarTextField, GUILayout.Width(260f));
                 if (GUILayout.Button("Refresh", EditorStyles.toolbarButton, GUILayout.Width(64f))) RefreshSpriteList();
+                if (GUILayout.Button("Generate image…", EditorStyles.toolbarButton, GUILayout.Width(118f))) ImageGenerationWindow.OpenWindow();
                 if (GUILayout.Button("Import PNG...", EditorStyles.toolbarButton, GUILayout.Width(96f)))
                 {
                     string path = EditorUtility.OpenFilePanel("Import image as sprite", string.Empty, "png,jpg,jpeg,tga,bmp");
@@ -1336,7 +1337,7 @@ namespace UnityAIBridge
                 }
             }
 
-            EditorGUILayout.HelpBox("Image generation is not configured. This panel imports and configures existing artwork only; it never claims to create images.", MessageType.Info);
+            EditorGUILayout.HelpBox("Use Generate image in the toolbar to create artwork with OpenAI API billing. Generated PNGs are previewed and staged for import before they enter Assets/.", MessageType.Info);
             DrawMaterialForm();
         }
 

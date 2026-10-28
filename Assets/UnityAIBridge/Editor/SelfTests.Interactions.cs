@@ -17,12 +17,17 @@ namespace UnityAIBridge
         static int _interactionPhase;
         static double _interactionDeadline;
         static double _interactionNotBefore;
+        static ImageGenerationWindow _interactionImage;
+        static bool _savedImageEnabled;
+        static string _savedImageKey;
 
         // Run in a disposable project with a real display. Pointer events traverse
         // the rendered panel; success requires the production button callbacks.
         public static void RunInteractionValidation()
         {
             ChatService.SuspendBackgroundWork();
+            _savedImageEnabled = BridgeSettings.Current.ImageGenerationEnabled;
+            _savedImageKey = BridgeSettings.Secrets.OpenAiApiKey;
             ChatService.EnsureLoaded();
             ChatService.SetConversationAutoAccept(false);
             ChatApproval.BeginRun();
@@ -55,9 +60,9 @@ namespace UnityAIBridge
             ChatService.Raise();
         }
 
-        static void PublishMouseTarget(string id, VisualElement target)
+        static void PublishMouseTarget(string id, VisualElement target, EditorWindow owner = null)
         {
-            var root = _interactionWindow.rootVisualElement;
+            var root = (owner != null ? owner : _interactionWindow).rootVisualElement;
             RequireStream(target != null && target.enabledInHierarchy && target.worldBound.width > 5 && target.worldBound.height > 5, "Mouse target unavailable: " + id);
             RequireStream(root.worldBound.Contains(target.worldBound.center), "Mouse target is outside the window: " + id);
             Vector2 center = target.worldBound.center;
@@ -168,7 +173,34 @@ namespace UnityAIBridge
                     case 12:
                         if (!_interactionDecision.IsCompleted) break;
                         RequireStream(_interactionDecision.Result.Resolution == "Comment" && _interactionDecision.Result.Comment == "Please revise the animation.", "Real Comment click did not record the comment.");
-                        FinishInteractions(true, "Rendered phases, Stop, idle visibility, 680×620 composer, destructive confirmation, Accept, Deny and Send comment passed through UI Toolkit pointer dispatch.");
+                        BridgeSettings.Current.ImageGenerationEnabled = true;
+                        BridgeSettings.Secrets.OpenAiApiKey = "rendered-image-fixture";
+                        _interactionImage = ScriptableObject.CreateInstance<ImageGenerationWindow>();
+                        _interactionImage.position = new Rect(80, 80, 680, 740);
+                        _interactionImage.ShowUtility(); _interactionImage.Focus();
+                        _interactionPhase = 13;
+                        break;
+                    case 13:
+                        var imageRoot = _interactionImage.rootVisualElement;
+                        var imagePrompt = imageRoot.Q<TextField>("image-prompt");
+                        if (imagePrompt == null || imagePrompt.worldBound.height < 10) break;
+                        imagePrompt.value = "Rendered fixture; do not generate.";
+                        RequireStream(!imageRoot.Q<Button>("image-generate").enabledInHierarchy, "Image generation lacks a cost-consent gate.");
+                        PublishMouseTarget("image-consent", imageRoot.Q<Toggle>("image-cost-consent"), _interactionImage);
+                        _interactionPhase = 14;
+                        break;
+                    case 14:
+                        imageRoot = _interactionImage.rootVisualElement;
+                        if (!imageRoot.Q<Toggle>("image-cost-consent").value) break;
+                        RequireStream(imageRoot.Q<Button>("image-generate").enabledInHierarchy, "Consented image-generation form did not enable.");
+                        PublishMouseTarget("image-disable", imageRoot.Q<Toggle>("image-generation-enabled"), _interactionImage);
+                        _interactionPhase = 15;
+                        break;
+                    case 15:
+                        imageRoot = _interactionImage.rootVisualElement;
+                        if (imageRoot.Q<Toggle>("image-generation-enabled").value) break;
+                        RequireStream(!imageRoot.Q<Button>("image-generate").enabledInHierarchy, "Disabling generation did not disable its button.");
+                        FinishInteractions(true, "Rendered run phases, compact approval/composer layout, Stop, destructive confirmation, Accept/Deny/Comment and image-generation consent/enable controls passed through UI Toolkit pointer dispatch. No image request was submitted.");
                         return;
                 }
                 if (EditorApplication.timeSinceStartup > _interactionDeadline) throw new Exception("Interaction validation timed out at phase " + _interactionPhase);
@@ -182,6 +214,10 @@ namespace UnityAIBridge
             ChatApproval.CancelForStop();
             SetInteractionBusy(false);
             _interactionChat.Detach();
+            if (_interactionImage != null) { _interactionImage.Close(); _interactionImage = null; }
+            BridgeSettings.Current.ImageGenerationEnabled = _savedImageEnabled;
+            BridgeSettings.Secrets.OpenAiApiKey = _savedImageKey;
+            BridgeSettings.Save();
             File.WriteAllText(Path.Combine(BridgePaths.LibraryRoot, "interaction-result.json"), JsonValue.Obj("ok", ok, "detail", detail).ToJson(true));
             Debug.Log("[Unity AI Bridge] Interaction validation: " + ok + " " + detail);
             _interactionWindow.Close(); _interactionWindow = null;

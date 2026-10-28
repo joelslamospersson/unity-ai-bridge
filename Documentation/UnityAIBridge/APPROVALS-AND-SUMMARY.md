@@ -36,3 +36,8 @@ The transcript uses normally laid out rows inside a vertical ScrollView, with hi
 The rendered validation now grows a live answer, thinking summary and multi-line tool result while the answer is still streaming and before any approval prompt exists. It checks that the same message row grows, tool and thinking content reach their final lines, and approval controls and the composer fit in a 680×620 window.
 
 Validation for this update: **99 passed, 0 failed** in an isolated Unity 6000.6.7f1 project; the rendered streaming layout check also passed. Results: `/tmp/unity-bridge-chat-fix/Library/UnityAIBridge/test-results.json` and `chat-layout-result.json`. No paid inference was used.
+
+
+## Paid image-generation consent
+
+Conversation auto acceptance applies to project permissions and changes. Image API billing consent is always explicit and is separate from importing the generated PNG. The consent journal records submission before the network request; a reload does not submit that paid request again. If submission was interrupted, review retained previews, pending imports and provider usage before requesting another generation.

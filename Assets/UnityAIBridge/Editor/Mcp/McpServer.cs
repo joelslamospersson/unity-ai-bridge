@@ -286,7 +286,7 @@ namespace UnityAIBridge
                         {
                             string name = parameters["name"].AsString();
                             var arguments = parameters["arguments"].IsObject ? parameters["arguments"] : JsonValue.NewObject();
-                            var result = McpTools.InvokeFromAnyThread(name, arguments);
+                            var result = await McpTools.InvokeAsync(name, arguments, token).ConfigureAwait(false);
                             return OkResponse(id, result);
                         }
 

@@ -539,6 +539,7 @@ namespace UnityAIBridge
             if (controller != null)
             {
                 result["kind"] = "animator_controller";
+                result["animation"] = AnimationService.DescribeController(controller);
                 var layers = JsonValue.NewArray();
                 foreach (var layer in controller.layers)
                 {

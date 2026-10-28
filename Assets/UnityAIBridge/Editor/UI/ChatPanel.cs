@@ -240,7 +240,7 @@ namespace UnityAIBridge
             _autoAccept = new Toggle("Auto accept all for this conversation")
             {
                 name = "chat-auto-accept",
-                tooltip = "Accept and apply all tool requests and proposed changes, including destructive changes, in this conversation. Turn off to review each operation. New conversations start with this off."
+                tooltip = "Accept and apply all tool requests and proposed changes, including destructive changes, in this conversation. Paid image generation always needs explicit billing consent. Turn off to review each project operation. New conversations start with this off."
             };
             _autoAccept.style.marginLeft = 10;
             _autoAccept.RegisterValueChangedCallback(evt => ChatService.SetConversationAutoAccept(evt.newValue));

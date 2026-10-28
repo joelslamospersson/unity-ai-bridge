@@ -93,6 +93,14 @@ namespace UnityAIBridge
 
                     case ChangeKinds.ImportSprite:
                         {
+                            if (p["create_only"].AsBool())
+                            {
+                                string destination;
+                                string destinationError = Permissions.CheckWrite(change.TargetPath, out destination, false, true);
+                                if (destinationError != null) return destinationError;
+                                if (File.Exists(destination) || File.Exists(destination + ".meta"))
+                                    return "The generated-image destination appeared after staging; refusing to overwrite it: " + change.TargetPath;
+                            }
                             string source = p["incoming_path"].AsString();
                             if (string.IsNullOrEmpty(source)) source = p["source_path"].AsString();
                             if (string.IsNullOrEmpty(source)) return "No image source was provided.";

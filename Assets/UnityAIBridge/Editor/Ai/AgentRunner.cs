@@ -108,7 +108,7 @@ namespace UnityAIBridge
                         {
                             var result = request.ToolExecutor != null
                                 ? await request.ToolExecutor(call, cancellationToken).ConfigureAwait(false)
-                                : McpTools.InvokeFromAnyThread(call.Name, arguments);
+                                : await McpTools.InvokeAsync(call.Name, arguments, cancellationToken).ConfigureAwait(false);
                             ok = !result["isError"].AsBool();
                             resultText = ExtractText(result);
                             CollectChangeIds(result, changeIds);

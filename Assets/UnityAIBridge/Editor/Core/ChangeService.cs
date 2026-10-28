@@ -242,6 +242,8 @@ namespace UnityAIBridge
                 string error = Permissions.CheckWrite(targetPath, out full, false, true);
                 if (error != null) throw new BridgeException(error);
                 string extension = Path.GetExtension(targetPath).ToLowerInvariant();
+                if (parameters["create_only"].AsBool() && (File.Exists(full) || File.Exists(full + ".meta")))
+                    throw new BridgeException("Generated image destination already exists: " + targetPath);
                 if (extension != ".png" && extension != ".jpg" && extension != ".jpeg" && extension != ".tga" && extension != ".bmp")
                     throw new BridgeException("Sprite import expects a PNG/JPG/TGA/BMP destination path.");
                 if (File.Exists(full)) destructive = true;
@@ -274,6 +276,9 @@ namespace UnityAIBridge
                 change.Diff = BuildDiff(change);
             if (kind == ChangeKinds.CreateAnimationClip || kind == ChangeKinds.CreateAnimatorController)
                 change.Diff = "New animation asset: " + change.TargetPath + "\n" + parameters.ToJson(true);
+            if (kind == ChangeKinds.ImportSprite && !parameters["generation_model"].IsNull)
+                change.Diff = "Generated image: " + targetPath + "\nModel: " + parameters["generation_model"].AsString() +
+                    "\nSize: " + parameters["generation_size"].AsString() + "\nBackground: " + parameters["generation_background"].AsString();
 
             _changes.Insert(0, change);
             TrimHistory();

@@ -34,6 +34,8 @@ namespace UnityAIBridge
         public string OpenAiBaseUrl = "https://api.openai.com/v1";
         public string OpenAiModel = "gpt-5.2";
         public string OpenAiApiStyle = "responses";
+        public bool ImageGenerationEnabled = false;
+        public string ImageGenerationModel = "gpt-image-2.5-sunburst";
         public string ClaudeBaseUrl = "https://api.anthropic.com/v1";
         public string ClaudeModel = "";
         public string ClaudeModelsJson = "";
@@ -189,6 +191,7 @@ namespace UnityAIBridge
             if (DeepSeekMaxTokens < 256) DeepSeekMaxTokens = 16384;
             if (string.IsNullOrEmpty(OpenAiBaseUrl)) OpenAiBaseUrl = "https://api.openai.com/v1";
             if (string.IsNullOrEmpty(OpenAiModel)) OpenAiModel = "gpt-5.2";
+            if (string.IsNullOrWhiteSpace(ImageGenerationModel)) ImageGenerationModel = "gpt-image-2.5-sunburst";
             if (string.IsNullOrEmpty(ClaudeBaseUrl)) ClaudeBaseUrl = "https://api.anthropic.com/v1";
             if (string.IsNullOrEmpty(GeminiBaseUrl)) GeminiBaseUrl = "https://generativelanguage.googleapis.com/v1beta";
             if (string.IsNullOrEmpty(ClaudeExecutable)) ClaudeExecutable = "claude";

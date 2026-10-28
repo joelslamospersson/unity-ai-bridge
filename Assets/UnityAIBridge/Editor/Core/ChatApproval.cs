@@ -24,6 +24,10 @@ namespace UnityAIBridge
         public string Resolution;
         public string Comment;
         public bool ConfirmedDestructive;
+        public bool RequireExplicitConsent;
+        public bool ScopedWrite;
+        public bool ExternalRequestStarted;
+        public string BillingFingerprint;
     }
 
     // Only the Unity main thread publishes/resolves prompts or applies changes.
@@ -49,6 +53,17 @@ namespace UnityAIBridge
             File.WriteAllText(temp, JsonUtility.ToJson(_journal));
             if (File.Exists(JournalFile)) File.Replace(temp, JournalFile, null);
             else File.Move(temp, JournalFile);
+        }
+
+        internal static void MarkExternalRequestStarted(string promptId)
+        {
+            MainThread.Invoke(() =>
+            {
+                if (_journal == null || _journal.Id != promptId || _journal.Resolution != "Accept" || _journal.ExternalRequestStarted)
+                    throw new BridgeException("Image-generation consent is no longer available. Review the request again.");
+                _journal.ExternalRequestStarted = true;
+                Save();
+            });
         }
 
         internal static void BeginRun(bool resetDecisions = true) { if (resetDecisions) DeniedCalls.Clear(); _preserve = false; }
@@ -102,7 +117,7 @@ namespace UnityAIBridge
                 // The user can opt this conversation into accepting every prompt,
                 // including destructive changes. Keep journaling/checkpointing so
                 // script compilation resumes through the normal approval path.
-                if (ChatService.ConversationAutoAccept) Resolve(prompt.Id, ApprovalChoice.Accept, "", true);
+                if (ChatService.ConversationAutoAccept && !prompt.RequireExplicitConsent) Resolve(prompt.Id, ApprovalChoice.Accept, "", true);
                 Notify();
                 return completion.Task;
             });
@@ -156,8 +171,12 @@ namespace UnityAIBridge
                 scopedWrite = true;
             }
             token.ThrowIfCancellationRequested();
-            var result = InvokeScoped(call, scopedWrite);
+            var result = call.Name == "generate_image"
+                ? await ImageGenerationService.GenerateAndStageAsync(JsonValue.Parse(call.Arguments), token, scopedWrite, false, call).ConfigureAwait(false)
+                : InvokeScoped(call, scopedWrite);
             if (result["isError"].AsBool()) return result;
+            if (call.Name == "generate_image" && (result["structuredContent"]["status"].AsString() == "Denied" || result["structuredContent"]["status"].AsString() == "RevisionRequested"))
+                DeniedCalls.Add(signature);
             var ids = new List<string>();
             CollectPendingIds(result, ids);
             if (ids.Count == 0) return result;
@@ -270,6 +289,13 @@ namespace UnityAIBridge
         {
             _checkpoint = checkpoint;
             if (prompt.Kind == "changes") return await ReviewChangesAsync(prompt.Tool, prompt.ChangeIds, token, prompt).ConfigureAwait(false);
+            if (prompt.Kind == "image-generation")
+            {
+                var generated = await ImageGenerationService.GenerateAndStageAsync(JsonValue.Parse(prompt.Tool.Arguments), token, prompt.ScopedWrite, false, prompt.Tool, prompt).ConfigureAwait(false);
+                var generatedIds = new List<string>(); CollectPendingIds(generated, generatedIds);
+                if (generatedIds.Count > 0) return await ReviewChangesAsync(prompt.Tool, generatedIds, token).ConfigureAwait(false);
+                return generated;
+            }
             // Reuse the persisted permission decision; never make a new implicit grant.
             var decision = await RequestAsync(prompt, token).ConfigureAwait(false);
             if (decision.Resolution != "Accept")
@@ -277,7 +303,9 @@ namespace UnityAIBridge
                 DeniedCalls.Add(prompt.Tool.Name + "|" + prompt.Tool.Arguments);
                 return DecisionResult(decision.Resolution == "Comment" ? "RevisionRequested" : "Denied", "The operation was not run.", decision.Comment, null);
             }
-            var result = InvokeScoped(prompt.Tool, true);
+            var result = prompt.Tool.Name == "generate_image"
+                ? await ImageGenerationService.GenerateAndStageAsync(JsonValue.Parse(prompt.Tool.Arguments), token, true, false, prompt.Tool).ConfigureAwait(false)
+                : InvokeScoped(prompt.Tool, true);
             var ids = new List<string>(); CollectPendingIds(result, ids);
             if (ids.Count > 0) return await ReviewChangesAsync(prompt.Tool, ids, token).ConfigureAwait(false);
             return result;

@@ -47,7 +47,10 @@ namespace UnityAIBridge
                 catch (Exception e) { completion.TrySetException(e); }
             });
 
-            if (!completion.Task.Wait(timeoutMs))
+            bool completed;
+            try { completed = completion.Task.Wait(timeoutMs); }
+            catch (AggregateException) { return completion.Task.GetAwaiter().GetResult(); }
+            if (!completed)
                 throw new BridgeException("Timed out after " + timeoutMs + " ms waiting for the Unity main thread.");
             return completion.Task.GetAwaiter().GetResult();
         }

@@ -148,7 +148,7 @@ namespace UnityAIBridge
             ChatHistory.SaveMeta(_meta);
             // Enabling this is also an explicit decision on the current prompt.
             var pending = ChatApproval.Pending;
-            if (enabled && pending != null) ChatApproval.Resolve(pending.Id, ApprovalChoice.Accept, "", true);
+            if (enabled && pending != null && !pending.RequireExplicitConsent) ChatApproval.Resolve(pending.Id, ApprovalChoice.Accept, "", true);
             Raise();
         }
 
