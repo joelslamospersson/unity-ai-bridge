@@ -32,13 +32,12 @@ namespace UnityAIBridge
         readonly DropdownField _mode;
         readonly DropdownField _effort;
         readonly Label _runStatus;
+        readonly RunActivityView _activity;
         readonly Button _retry;
         readonly ChatApprovalView _approval;
         string _accountSignature;
         string _draftKey;
         static readonly Dictionary<string, string> Drafts = new Dictionary<string, string>();
-        DateTime _runStarted;
-        bool _wasBusy;
 
         readonly Dictionary<string, bool> _activityExpanded = new Dictionary<string, bool>(StringComparer.Ordinal);
         readonly Dictionary<string, bool> _reasoningExpanded = new Dictionary<string, bool>(StringComparer.Ordinal);
@@ -170,6 +169,9 @@ namespace UnityAIBridge
             _approval = new ChatApprovalView();
             Add(_approval);
 
+            _activity = new RunActivityView();
+            Add(_activity);
+
             _runStatus = new Label { name = "chat-run-status" };
             _runStatus.style.fontSize = 11;
             _runStatus.style.whiteSpace = WhiteSpace.Normal;
@@ -280,7 +282,7 @@ namespace UnityAIBridge
             {
                 if (ChatService.IsBusy) ChatService.Stop();
                 else SendCurrent();
-            }) { text = "Send" };
+            }) { text = "Send", name = "chat-send-stop" };
             _send.style.fontSize = 11;
             _send.style.minWidth = 88;
             _send.style.height = 27;
@@ -511,11 +513,10 @@ namespace UnityAIBridge
             _send.tooltip = ready || busy ? string.Empty : (reason ?? "Select a model to send.");
             _mode.SetEnabled(!busy);
             _effort.SetEnabled(!busy && (IsOpenAi() ? OpenAiResponsesProvider.SupportsReasoning(ChatService.CurrentModel) : ChatService.CurrentProviderId != BridgeSettings.ProviderOllama));
-            if (busy && !_wasBusy) _runStarted = DateTime.UtcNow;
-            _wasBusy = busy;
-            _runStatus.style.display = busy || !string.IsNullOrEmpty(ChatService.LastError) ? DisplayStyle.Flex : DisplayStyle.None;
+            _activity.Show(ChatService.ActivitySnapshot, busy);
+            _runStatus.style.display = !busy && !string.IsNullOrEmpty(ChatService.LastError) ? DisplayStyle.Flex : DisplayStyle.None;
             _retry.style.display = !busy && !string.IsNullOrEmpty(ChatService.LastError) ? DisplayStyle.Flex : DisplayStyle.None;
-            _runStatus.text = busy ? (ChatService.StatusMessage ?? "Working…") + "  ·  " + (int)(DateTime.UtcNow - _runStarted).TotalSeconds + "s" : ChatService.LastError;
+            _runStatus.text = ChatService.LastError ?? "";
             _send.style.backgroundColor = busy
                 ? new Color(0.55f, 0.22f, 0.22f)
                 : (EditorGUIUtility.isProSkin ? new Color(0.2f, 0.42f, 0.64f) : new Color(0.2f, 0.46f, 0.72f));

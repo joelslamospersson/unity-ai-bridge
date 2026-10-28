@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.3.0 — 2026-10-28
+
+- Added a persistent activity panel for waiting, thinking, writing, preparing tools, reading, editing, review and Stop. It shows elapsed time, actual provider data age and last-progress age; heartbeats do not masquerade as model progress. Quiet-provider notices appear after 45 seconds without traffic or progress and do not mislabel approval waits.
+- Fixed false stream timeouts: streaming deadlines now measure inactivity and reset on fragments, comments and heartbeats. Responses terminal events, chat `[DONE]`, Claude `message_stop` and Ollama `done` release the connection immediately. Header/error-body waits and user cancellation remain bounded.
+- Added one safe timeout retry before output starts, preserving committed tool results. Partial text, reasoning and tool calls are never automatically replayed.
+- Added approval-controlled `create_animation_clip` and `create_animator_controller`: transform curves, interpolation, sprite subasset frames, loop/sample settings, states/default state and timed transitions. Validation runs before staging and again before writing; existing assets and GUIDs are preserved on collisions. Animation inspection includes bounded curve/frame summaries.
+- Added rendered pointer-interaction validation using Python standard library and Unity UI Toolkit. It exercises production Stop and approval callbacks in a rendered Unity window, including destructive confirmation and a compact window layout. Pointer events are simulated inside the panel; native desktop mouse automation remains unverified.
+- Validation: 184 self-tests passed in Unity 6000.6.7f1; rendered layout and interaction results are documented in TESTING.md. No live paid inference was used.
+- Remaining scope is explicit: no built-in image generation, visual animation timeline, rig authoring, blend trees or conditional state-machine authoring; cross-platform mouse automation and screenshot-diff testing remain open.
+
 ## 2.2.0
 
 - Added native Claude API and Gemini API providers with private API-key storage, Save & test, paginated account model discovery, streaming text/thinking, native function tools and usage reporting. Signed thinking and function-call data survive tool-result replay; blocked or incomplete responses surface as failures.

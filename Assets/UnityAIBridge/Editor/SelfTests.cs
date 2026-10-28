@@ -561,6 +561,12 @@ namespace UnityAIBridge
 
             var reliability = RunChatReliabilityTests();
             while (reliability.MoveNext()) yield return reliability.Current;
+            var streamTimeouts = RunStreamTimeoutTests();
+            while (streamTimeouts.MoveNext()) yield return streamTimeouts.Current;
+            RunActivityTests();
+            RunAnimationTests();
+            var activityTransport = RunActivityTransportTests();
+            while (activityTransport.MoveNext()) yield return activityTransport.Current;
 
             // 23. DeepSeek streaming, tool calls, usage and cost
             var deepSeekTest = RunDeepSeekStreamTest();

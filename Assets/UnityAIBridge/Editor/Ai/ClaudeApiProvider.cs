@@ -137,7 +137,7 @@ namespace UnityAIBridge
                 }
                 else if (type == "message_delta") { stopReason = evt["delta"]["stop_reason"].AsString(); usage.CompletionTokens = evt["usage"]["output_tokens"].AsInt(usage.CompletionTokens); }
                 else if (type == "message_stop") stopped = true;
-            }, token).ConfigureAwait(false);
+            }, token, () => stopped, () => onEvent(new StreamEvent { Kind = StreamEventKind.TransportActivity })).ConfigureAwait(false);
             if (!stopped) throw new BridgeException("Claude stream ended before message_stop. Retry the response.");
             if (stopReason == "max_tokens") throw new BridgeException("Claude reached the output limit before finishing. Increase max output tokens and retry.");
             if (stopReason != "end_turn" && stopReason != "tool_use" && stopReason != "stop_sequence") throw new BridgeException("Claude did not finish successfully: " + (stopReason ?? "missing stop reason"));

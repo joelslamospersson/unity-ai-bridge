@@ -22,3 +22,6 @@ Builds/
 .DS_Store
 secrets.json
 *.kab-tmp
+
+__pycache__/
+*.pyc

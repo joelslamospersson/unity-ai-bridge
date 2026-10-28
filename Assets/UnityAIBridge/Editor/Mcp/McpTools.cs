@@ -21,7 +21,7 @@ namespace UnityAIBridge
     /// </summary>
     public static class McpTools
     {
-        public const string ServerVersion = "2.0.0";
+        public const string ServerVersion = "2.3.0";
 
         static List<McpTool> _tools;
 
@@ -581,6 +581,47 @@ namespace UnityAIBridge
                     action["type"] = "create_material";
                     return StageAction(action);
                 }
+            });
+
+            tools.Add(new McpTool
+            {
+                Name = "create_animation_clip",
+                Description = "Stage a new .anim asset with transform keyframes and/or SpriteRenderer sprite frames. No scripts or animation events execute. Use inspect_asset to find exact sprite subasset names. Times are seconds and strictly increasing; paths are relative to the Animator root. Approve/apply the clip before referencing it in a controller.",
+                IsWrite = true,
+                InputSchema = Schema(JsonValue.Obj(
+                    "path", Prop("string", "New asset path under Assets/, ending in .anim. Existing assets are never overwritten."),
+                    "frame_rate", Prop("number", "Sample rate, 1–240; default 30."),
+                    "loop", Prop("boolean", "Loop the animation; default false."),
+                    "curves", JsonValue.Obj("type", "array", "maxItems", 64, "items", Schema(JsonValue.Obj(
+                        "path", Prop("string", "Child transform path, or empty for Animator root."),
+                        "property", JsonValue.Obj("type", "string", "enum", JsonValue.Arr("m_LocalPosition.x", "m_LocalPosition.y", "m_LocalPosition.z", "m_LocalScale.x", "m_LocalScale.y", "m_LocalScale.z", "localEulerAnglesRaw.x", "localEulerAnglesRaw.y", "localEulerAnglesRaw.z")),
+                        "interpolation", JsonValue.Obj("type", "string", "enum", JsonValue.Arr("linear", "constant", "smooth")),
+                        "keys", JsonValue.Obj("type", "array", "minItems", 1, "maxItems", 1000, "items", Schema(JsonValue.Obj(
+                            "time", Prop("number", "Seconds, 0–3600."), "value", Prop("number", "Finite property value.")), "time", "value"))), "property", "keys")),
+                    "sprite_target", Prop("string", "Child SpriteRenderer path; default empty (Animator root)."),
+                    "sprite_frames", JsonValue.Obj("type", "array", "maxItems", 1000, "items", Schema(JsonValue.Obj(
+                        "time", Prop("number", "Seconds, 0–3600."),
+                        "sprite_path", Prop("string", "Existing imported sprite or sprite-sheet path under Assets/."),
+                        "sprite_name", Prop("string", "Exact subasset name; required for multi-sprite sheets.")), "time", "sprite_path"))), "path"),
+                Handler = args => { var action = JsonValue.Parse(args.ToJson(false)); action["type"] = "create_animation_clip"; return StageAction(action); }
+            });
+
+            tools.Add(new McpTool
+            {
+                Name = "create_animator_controller",
+                Description = "Stage a new Animator Controller using existing .anim clips, a default state and optional timed transitions. Creates assets after approval; assign the result to an Animator through update_component. Existing controllers are never overwritten. Conditional transitions, parameters and blend trees are not authored by this tool.",
+                IsWrite = true,
+                InputSchema = Schema(JsonValue.Obj(
+                    "path", Prop("string", "New Assets/ path ending in .controller."),
+                    "default_state", Prop("string", "Initial state name; defaults to the first state."),
+                    "states", JsonValue.Obj("type", "array", "minItems", 1, "maxItems", 64, "items", Schema(JsonValue.Obj(
+                        "name", Prop("string", "Unique state name without slash or dot."),
+                        "clip", Prop("string", "Existing .anim asset path; apply clip creation first.")), "name", "clip")),
+                    "transitions", JsonValue.Obj("type", "array", "maxItems", 128, "items", Schema(JsonValue.Obj(
+                        "from", Prop("string", "Source state name."), "to", Prop("string", "Destination state name."),
+                        "exit_time", Prop("number", "Normalized exit time, 0–100; default 1 (one clip cycle)."),
+                        "duration", Prop("number", "Blend duration in seconds, 0–10; default 0.1.")), "from", "to"))), "path", "states"),
+                Handler = args => { var action = JsonValue.Parse(args.ToJson(false)); action["type"] = "create_animator_controller"; return StageAction(action); }
             });
 
             tools.Add(new McpTool

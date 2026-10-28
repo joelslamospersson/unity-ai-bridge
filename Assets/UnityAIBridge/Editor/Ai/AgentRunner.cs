@@ -42,7 +42,7 @@ namespace UnityAIBridge
                 if (step > 0) onEvent(StreamEvent.Status("Continuing after tool results (step " + (step + 1) + "/" + maxSteps + ")..."));
 
                 bool firstText = true;
-                var turn = await provider.StreamTurnAsync(request, evt =>
+                var turn = await StreamWithTimeoutRecoveryAsync(provider, request, evt =>
                 {
                     if (evt != null && evt.Kind == StreamEventKind.TextDelta && !string.IsNullOrEmpty(evt.Text))
                     {
@@ -89,7 +89,7 @@ namespace UnityAIBridge
                 foreach (var call in turn.ToolCalls)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    onEvent(new StreamEvent { Kind = StreamEventKind.ToolCallStarted, ToolCall = call.Clone(), Text = call.Name });
+                    onEvent(new StreamEvent { Kind = StreamEventKind.ToolExecutionStarted, ToolCall = call.Clone(), Text = call.Name });
                     string resultText;
                     bool ok = true;
                     var changeIds = new List<string>();
@@ -216,7 +216,32 @@ namespace UnityAIBridge
                     evt.Kind == StreamEventKind.ChangeStaged) return;
                 onEvent(evt);
             };
-            return await provider.StreamTurnAsync(finalRequest, buffered, cancellationToken).ConfigureAwait(false);
+            return await StreamWithTimeoutRecoveryAsync(provider, finalRequest, buffered, cancellationToken).ConfigureAwait(false);
+        }
+
+        internal static async Task<ProviderTurn> StreamWithTimeoutRecoveryAsync(ILiveProvider provider, LlmRequest request,
+            Action<StreamEvent> onEvent, CancellationToken cancellationToken)
+        {
+            for (int attempt = 0; ; attempt++)
+            {
+                bool outputStarted = false;
+                try
+                {
+                    return await provider.StreamTurnAsync(request, evt =>
+                    {
+                        if (evt != null && evt.Kind != StreamEventKind.Status && evt.Kind != StreamEventKind.Usage && evt.Kind != StreamEventKind.TransportActivity)
+                            outputStarted = true;
+                        onEvent(evt);
+                    }, cancellationToken).ConfigureAwait(false);
+                }
+                catch (ProviderTimeoutException) when (attempt == 0 && !outputStarted && !cancellationToken.IsCancellationRequested)
+                {
+                    // Retry only this inference. Completed tools remain in request.Messages;
+                    // no project tools, partial answers or partial tool calls are replayed.
+                    onEvent(StreamEvent.Status("The provider stopped responding before output began. Retrying once; completed tool results are preserved..."));
+                    await Task.Delay(500, cancellationToken).ConfigureAwait(false);
+                }
+            }
         }
 
         static bool IsUnusableFinalAnswer(string text)

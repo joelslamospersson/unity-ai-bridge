@@ -129,6 +129,10 @@ namespace UnityAIBridge
                         return ChangeService.Stage(ChangeKinds.CreateMaterial, "Create material " + Path.GetFileName(path), path, null, action, source, false);
                     }
 
+                case "create_animation_clip":
+                case "create_animator_controller":
+                    return ChangeService.Stage(type, null, RequiredPath(action), null, action, source, false);
+
                 case "assign_sprite":
                     {
                         string target = First(action, "target", "target_path", "gameobject");

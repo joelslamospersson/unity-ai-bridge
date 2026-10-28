@@ -19,6 +19,8 @@ namespace UnityAIBridge
         public const string SetComponentProperty = "set_component_property";
         public const string CreatePrefab = "create_prefab";
         public const string CreateMaterial = "create_material";
+        public const string CreateAnimationClip = "create_animation_clip";
+        public const string CreateAnimatorController = "create_animator_controller";
         public const string ImportSprite = "import_sprite";
         public const string ConfigureSprite = "configure_sprite";
         public const string SliceSprite = "slice_sprite";
@@ -244,6 +246,8 @@ namespace UnityAIBridge
                     throw new BridgeException("Sprite import expects a PNG/JPG/TGA/BMP destination path.");
                 if (File.Exists(full)) destructive = true;
             }
+            else if (kind == ChangeKinds.CreateAnimationClip) AnimationService.ValidateClip(targetPath, parameters);
+            else if (kind == ChangeKinds.CreateAnimatorController) AnimationService.ValidateController(targetPath, parameters);
             else if (kind == ChangeKinds.CreateMaterial || kind == ChangeKinds.CreatePrefab || kind == ChangeKinds.CreateScriptableObject)
             {
                 string full;
@@ -268,6 +272,8 @@ namespace UnityAIBridge
 
             if (change.IsFileChange && !string.IsNullOrEmpty(change.TargetPath))
                 change.Diff = BuildDiff(change);
+            if (kind == ChangeKinds.CreateAnimationClip || kind == ChangeKinds.CreateAnimatorController)
+                change.Diff = "New animation asset: " + change.TargetPath + "\n" + parameters.ToJson(true);
 
             _changes.Insert(0, change);
             TrimHistory();
@@ -313,6 +319,8 @@ namespace UnityAIBridge
                 case ChangeKinds.SetComponentProperty: return "Update component";
                 case ChangeKinds.CreatePrefab: return "Create prefab " + Path.GetFileName(path);
                 case ChangeKinds.CreateMaterial: return "Create material " + Path.GetFileName(path);
+                case ChangeKinds.CreateAnimationClip: return "Create animation clip " + Path.GetFileName(path);
+                case ChangeKinds.CreateAnimatorController: return "Create Animator Controller " + Path.GetFileName(path);
                 case ChangeKinds.ImportSprite: return "Import sprite " + Path.GetFileName(path);
                 case ChangeKinds.AssignSprite: return "Assign sprite";
                 case ChangeKinds.SliceSprite: return "Slice sprite sheet " + Path.GetFileName(path);

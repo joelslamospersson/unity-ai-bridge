@@ -296,7 +296,7 @@ namespace UnityAIBridge
                             break;
                         }
                 }
-            }, cancellationToken).ConfigureAwait(false);
+            }, cancellationToken, () => stopReason != null || streamError != null, () => onEvent(new StreamEvent { Kind = StreamEventKind.TransportActivity })).ConfigureAwait(false);
 
             if (!string.IsNullOrEmpty(streamError)) throw new BridgeException(streamError);
             if (stopReason != "completed")

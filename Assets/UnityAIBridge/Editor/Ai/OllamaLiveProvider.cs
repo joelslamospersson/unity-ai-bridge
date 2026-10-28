@@ -118,6 +118,7 @@ namespace UnityAIBridge
             var reasoning = new System.Text.StringBuilder();
             var calls = new List<ToolCall>();
             var callIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+            bool done = false;
             TokenUsage usage = new TokenUsage { Model = request.Model };
 
             await StreamingHttp.PostNdjsonAsync(BaseUrl() + "/api/chat", body.ToJson(false), Headers(),
@@ -164,11 +165,12 @@ namespace UnityAIBridge
 
                     if (chunk["done"].AsBool())
                     {
+                        done = true;
                         usage.PromptTokens = chunk["prompt_eval_count"].AsInt();
                         usage.CompletionTokens = chunk["eval_count"].AsInt();
                         usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens;
                     }
-                }, cancellationToken).ConfigureAwait(false);
+                }, cancellationToken, () => done, () => onEvent(new StreamEvent { Kind = StreamEventKind.TransportActivity })).ConfigureAwait(false);
 
             var turn = new ProviderTurn
             {

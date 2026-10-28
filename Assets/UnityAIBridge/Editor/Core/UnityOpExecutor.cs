@@ -72,6 +72,14 @@ namespace UnityAIBridge
                     case ChangeKinds.CreatePrefab:
                         return CreatePrefab(change, p);
 
+                    case ChangeKinds.CreateAnimationClip:
+                        AnimationService.CreateClip(change.TargetPath, p);
+                        return null;
+
+                    case ChangeKinds.CreateAnimatorController:
+                        AnimationService.CreateController(change.TargetPath, p);
+                        return null;
+
                     case ChangeKinds.CreateMaterial:
                         {
                             Color color = Color.white;

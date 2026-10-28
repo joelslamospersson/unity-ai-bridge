@@ -8,6 +8,14 @@ using System.Threading.Tasks;
 
 namespace UnityAIBridge
 {
+    public sealed class ProviderTimeoutException : BridgeException
+    {
+        public ProviderTimeoutException(TimeSpan timeout, bool streaming)
+            : base(streaming
+                ? "The provider sent no stream data for " + timeout.TotalSeconds + " seconds. Completed tool results are preserved; retry to continue."
+                : "The provider did not send response headers within " + timeout.TotalSeconds + " seconds. Retry to continue.") { }
+    }
+
     public sealed class HttpStatusException : BridgeException
     {
         public int StatusCode { get; private set; }
@@ -26,19 +34,20 @@ namespace UnityAIBridge
         static readonly HttpClient Client = new HttpClient(new HttpClientHandler()) { Timeout = Timeout.InfiniteTimeSpan };
 
         public static async Task PostSseAsync(string url, string json, Dictionary<string, string> headers, int timeoutSeconds,
-            Action<string> onData, CancellationToken cancellationToken)
+            Action<string> onData, CancellationToken cancellationToken, Func<bool> isComplete = null, Action onActivity = null)
         {
-            await PostStreamAsync(url, json, headers, timeoutSeconds, true, onData, cancellationToken).ConfigureAwait(false);
+            await PostStreamAsync(url, json, headers, TimeSpan.FromSeconds(Math.Max(10, timeoutSeconds)), true, onData, cancellationToken, isComplete, onActivity).ConfigureAwait(false);
         }
 
         public static async Task PostNdjsonAsync(string url, string json, Dictionary<string, string> headers, int timeoutSeconds,
-            Action<string> onLine, CancellationToken cancellationToken)
+            Action<string> onLine, CancellationToken cancellationToken, Func<bool> isComplete = null, Action onActivity = null)
         {
-            await PostStreamAsync(url, json, headers, timeoutSeconds, false, onLine, cancellationToken).ConfigureAwait(false);
+            await PostStreamAsync(url, json, headers, TimeSpan.FromSeconds(Math.Max(10, timeoutSeconds)), false, onLine, cancellationToken, isComplete, onActivity).ConfigureAwait(false);
         }
 
-        static async Task PostStreamAsync(string url, string json, Dictionary<string, string> headers, int timeoutSeconds,
-            bool sse, Action<string> onLine, CancellationToken cancellationToken)
+        // A TimeSpan entry point lets regressions exercise the real transport with short deadlines.
+        internal static async Task PostStreamAsync(string url, string json, Dictionary<string, string> headers, TimeSpan idleTimeout,
+            bool sse, Action<string> onLine, CancellationToken cancellationToken, Func<bool> isComplete = null, Action onActivity = null)
         {
             using (var request = new HttpRequestMessage(HttpMethod.Post, url))
             {
@@ -50,7 +59,7 @@ namespace UnityAIBridge
 
                 using (var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
                 {
-                    linked.CancelAfter(TimeSpan.FromSeconds(Math.Max(10, timeoutSeconds)));
+                    linked.CancelAfter(idleTimeout);
                     HttpResponseMessage response;
                     try
                     {
@@ -59,7 +68,7 @@ namespace UnityAIBridge
                     catch (OperationCanceledException)
                     {
                         if (cancellationToken.IsCancellationRequested) throw;
-                        throw new BridgeException("The provider did not respond within " + timeoutSeconds + " seconds.");
+                        throw new ProviderTimeoutException(idleTimeout, false);
                     }
                     catch (HttpRequestException e)
                     {
@@ -67,65 +76,85 @@ namespace UnityAIBridge
                     }
 
                     using (response)
+                    using (linked.Token.Register(() => { try { response.Dispose(); } catch { } }))
                     {
-                        if (!response.IsSuccessStatusCode)
+                        // Headers start a fresh inactivity window. There is no total-duration limit.
+                        linked.CancelAfter(idleTimeout);
+                        if (onActivity != null) onActivity();
+                        try
                         {
-                            string body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                            throw new HttpStatusException((int)response.StatusCode, DescribeError(response.StatusCode, body), body);
-                        }
-
-                        using (var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
-                        using (var reader = new System.IO.StreamReader(stream, Encoding.UTF8))
-                        using (linked.Token.Register(() => { try { stream.Dispose(); } catch { } }))
-                        {
-                            var data = new StringBuilder();
-                            while (true)
+                            if (!response.IsSuccessStatusCode)
                             {
-                                cancellationToken.ThrowIfCancellationRequested();
-                                if (linked.IsCancellationRequested) throw new BridgeException("The provider stream timed out.");
-                                string line;
-                                try { line = await reader.ReadLineAsync().ConfigureAwait(false); }
-                                catch (Exception) when (linked.IsCancellationRequested)
-                                {
-                                    cancellationToken.ThrowIfCancellationRequested();
-                                    throw new BridgeException("The provider stream timed out.");
-                                }
-                                if (line == null)
-                                {
-                                    cancellationToken.ThrowIfCancellationRequested();
-                                    if (linked.IsCancellationRequested) throw new BridgeException("The provider stream timed out.");
-                                    break;
-                                }
-
-                                if (!sse)
-                                {
-                                    if (line.Length > 0) onLine(line);
-                                    continue;
-                                }
-
-                                if (line.Length == 0)
-                                {
-                                    if (data.Length > 0)
-                                    {
-                                        onLine(data.ToString());
-                                        data.Length = 0;
-                                    }
-                                    continue;
-                                }
-                                if (line.StartsWith(":", StringComparison.Ordinal)) continue;
-                                if (line.StartsWith("data:", StringComparison.Ordinal))
-                                {
-                                    string payload = line.Substring(5);
-                                    if (payload.StartsWith(" ", StringComparison.Ordinal)) payload = payload.Substring(1);
-                                    if (data.Length > 0) data.Append('\n');
-                                    data.Append(payload);
-                                }
+                                string body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                                throw new HttpStatusException((int)response.StatusCode, DescribeError(response.StatusCode, body), body);
                             }
-                            if (sse && data.Length > 0) onLine(data.ToString());
+
+                            using (var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                            using (var reader = new System.IO.StreamReader(stream, Encoding.UTF8))
+                            {
+                                var data = new StringBuilder();
+                                var line = new StringBuilder();
+                                var buffer = new char[4096];
+                                bool skipLf = false;
+                                while (true)
+                                {
+                                    cancellationToken.ThrowIfCancellationRequested();
+                                    linked.Token.ThrowIfCancellationRequested();
+                                    int count = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+                                    cancellationToken.ThrowIfCancellationRequested();
+                                    linked.Token.ThrowIfCancellationRequested();
+                                    if (count == 0) break;
+                                    // Reset on received fragments, including heartbeats and partial lines.
+                                    linked.CancelAfter(idleTimeout);
+                                    if (onActivity != null) onActivity();
+                                    for (int i = 0; i < count; i++)
+                                    {
+                                        char c = buffer[i];
+                                        if (skipLf && c == '\n') { skipLf = false; continue; }
+                                        skipLf = c == '\r';
+                                        if (c == '\r' || c == '\n')
+                                        {
+                                            if (DispatchLine(line.ToString(), sse, data, onLine, isComplete)) return;
+                                            line.Length = 0;
+                                        }
+                                        else line.Append(c);
+                                    }
+                                }
+                                if (line.Length > 0 && DispatchLine(line.ToString(), sse, data, onLine, isComplete)) return;
+                                if (sse && data.Length > 0) onLine(data.ToString());
+                            }
+                        }
+                        catch (Exception) when (linked.IsCancellationRequested)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            throw new ProviderTimeoutException(idleTimeout, true);
                         }
                     }
                 }
             }
+        }
+
+        static bool DispatchLine(string line, bool sse, StringBuilder data, Action<string> onLine, Func<bool> isComplete)
+        {
+            if (!sse)
+            {
+                if (line.Length > 0) onLine(line);
+            }
+            else if (line.Length == 0 && data.Length > 0)
+            {
+                string payload = data.ToString();
+                data.Length = 0;
+                onLine(payload);
+                if (payload == "[DONE]") return true;
+            }
+            else if (line.StartsWith("data:", StringComparison.Ordinal))
+            {
+                string payload = line.Substring(5);
+                if (payload.StartsWith(" ", StringComparison.Ordinal)) payload = payload.Substring(1);
+                if (data.Length > 0) data.Append('\n');
+                data.Append(payload);
+            }
+            return isComplete != null && isComplete();
         }
 
         public static async Task<JsonValue> GetJsonAsync(string url, Dictionary<string, string> headers, int timeoutSeconds, CancellationToken cancellationToken)

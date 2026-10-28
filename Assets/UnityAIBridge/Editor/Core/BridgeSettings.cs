@@ -62,6 +62,7 @@ namespace UnityAIBridge
         public double Temperature = 0.2;
         public int MaxOutputTokens = 8192;
         public string ResponseMode = "concise";
+        // Header deadline; streaming requests renew this inactivity window on received data.
         public int RequestTimeoutSeconds = 300;
         public int MaxAgentSteps = 16;
         public bool ShowReasoning = true;

@@ -89,6 +89,8 @@ namespace UnityAIBridge
         static bool _testing;
 
         public static bool IsBusy { get; private set; }
+        internal static readonly RunActivityTracker Activity = new RunActivityTracker();
+        internal static RunActivitySnapshot ActivitySnapshot { get { return Activity.Snapshot(ChatApproval.Pending != null); } }
         public static bool Suspended { get; private set; }
         public static string StatusMessage { get; private set; }
         public static string LastError { get; private set; }
@@ -706,6 +708,7 @@ namespace UnityAIBridge
             ResetStreamBuffers();
             _lastFlushUtc = DateTime.UtcNow.AddMilliseconds(-100);
             IsBusy = true;
+            Activity.Begin();
             LastError = null;
             StatusMessage = "Connecting to " + provider.DisplayName + "...";
             _cancellation = new CancellationTokenSource();
@@ -896,6 +899,9 @@ namespace UnityAIBridge
             if (evt == null) return;
             if (run != Volatile.Read(ref _runSerial)) return;
 
+            Activity.Observe(evt);
+            if (evt.Kind == StreamEventKind.TransportActivity) return;
+
             if (evt.Kind == StreamEventKind.TextDelta)
             {
                 lock (StreamLock) PendingText.Append(evt.Text);
@@ -999,6 +1005,7 @@ namespace UnityAIBridge
                     break;
 
                 case StreamEventKind.ToolCallStarted:
+                case StreamEventKind.ToolExecutionStarted:
                     if (evt.ToolCall != null) OnToolStarted(evt.ToolCall);
                     break;
 
@@ -1349,6 +1356,7 @@ namespace UnityAIBridge
             ChatApproval.CancelForStop();
             ClearApprovalContinuation();
             StatusMessage = "Stopping...";
+            Activity.Stopping();
             try { if (_cancellation != null) _cancellation.Cancel(); } catch { }
             Raise();
         }
@@ -1431,6 +1439,7 @@ namespace UnityAIBridge
             var prompt = ChatApproval.Journal;
             _resumingApproval = true;
             IsBusy = true;
+            Activity.Begin();
             _cancellation = new CancellationTokenSource();
             var token = _cancellation.Token;
             int run = Interlocked.Increment(ref _runSerial);

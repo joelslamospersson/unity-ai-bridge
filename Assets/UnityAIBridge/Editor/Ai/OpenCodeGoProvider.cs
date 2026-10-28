@@ -242,7 +242,7 @@ namespace UnityAIBridge
                         string finish = choice["finish_reason"].AsString();
                         if (!string.IsNullOrEmpty(finish)) finishReason = finish;
                         if (chunk["usage"].IsObject) usage = ParseUsage(chunk["usage"], request.Model);
-                    }, cancellationToken).ConfigureAwait(false);
+                    }, cancellationToken, null, () => onEvent(new StreamEvent { Kind = StreamEventKind.TransportActivity })).ConfigureAwait(false);
             }
             catch (HttpStatusException e)
             {

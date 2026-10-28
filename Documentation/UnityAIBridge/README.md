@@ -9,6 +9,8 @@ It is not affiliated with, endorsed by, or sponsored by Unity Technologies, Open
 ## Highlights
 
 - **UI Toolkit chat** with growing transcript rows, conversation sidebar, paged history and lazy older-page loading
+- **Live activity indicator** with observed thinking/writing/reading/editing phases, elapsed time, actual last-data and progress ages, approval waits and a quiet-provider notice
+- **Animation authoring** for transform keyframes, sprite-frame clips and Animator Controllers with timed transitions, staged for approval
 - **Responsive streaming** with buffered 10–15 FPS UI updates, periodic crash-recovery checkpoints, Markdown, syntax-highlighted code blocks, file cards and compact tool groups
 - **Token-aware context**: recent turns plus an older-context summary; project context is cached and script source is read through tools instead of being pasted into every request
 - **Response modes** (Concise/Balanced/Detailed) and a separately configurable output-token budget
@@ -59,6 +61,10 @@ The composer includes three modes:
 
 **Reasoning** selects the model's effort for the next response. OpenAI/ChatGPT offer Default, Low, Medium, and High on recognized reasoning models; model support varies. Thinking summaries appear separately from the answer when the provider supplies them. Default lets the provider choose its effort. Reasoning is independent of the Chat/Plan/Agent mode.
 
+While a request is running, the activity panel shows its current phase and elapsed time. The pulsing dot is local UI feedback; **last data** measures actual provider traffic, and **last progress** distinguishes model output from heartbeats. After 45 seconds without data or progress, the panel warns that the provider may be stalled. Approval waits are identified separately. A quiet provider may still be computing; Stop remains available.
+
+Streaming uses an inactivity timeout, renewed by received fragments and heartbeats, rather than a limit on the whole response. Completed Responses, Claude and Ollama streams stop at their terminal events. One timeout retry is allowed before output begins, preserving completed tool results. Partial answers and tool-call output are not automatically replayed.
+
 Press **Enter** to send or **Shift+Enter** for a newline (Alt+Enter also works). **Stop** or **Esc** cancels generation, including stalled streams. **Retry response** continues a failed request from its recorded conversation and tool results, without inserting a duplicate user prompt. Unsent drafts are retained in memory when switching conversations and providers; they do not survive a Unity domain reload. Scrolling upward pauses following; **Jump to latest** resumes it.
 
 
@@ -87,7 +93,7 @@ The assistant is instructed to inspect the project dynamically. It must not assu
 | Area | Capabilities |
 | --- | --- |
 | Inspect | Project summary, files, scripts, scene hierarchy, components/properties, prefabs, materials, animator controllers, sprite import settings, packages, console and compiler diagnostics |
-| Edit | Text files, folders, GameObjects, components, prefabs, materials, ScriptableObjects, PNG/JPG sprite import, sprite-sheet slicing, sprite assignment, scene save |
+| Edit | Text files, folders, GameObjects, components, prefabs, materials, ScriptableObjects, PNG/JPG sprite import, sprite-sheet slicing, sprite assignment, transform and sprite-frame animation clips, Animator Controllers with timed transitions, scene save |
 | Reuse | Existing scripts, assets, prefabs, materials and project conventions are inspected before proposing changes |
 
 Write operations are staged as diffs in **Pending Changes**. They require review unless you have enabled the applicable automatic approval setting.
@@ -142,7 +148,7 @@ See [MCP.md](MCP.md).
 
 Run **Tools → Unity AI Bridge → Run Self Tests**. The suite covers file and asset operations, sandbox escapes, permission failures, Undo, MCP, provider request/stream parsing, OAuth PKCE/JWT/refresh and the tool loop.
 
-The latest isolated Unity 6000.6.7f1 run passed **152 tests**, and the rendered streaming layout check passed. Claude/Gemini protocol tests use localhost mocks; no live paid inference was performed.
+The latest isolated Unity 6000.6.7f1 run passed **184 tests**, and the rendered streaming layout check passed. An additional rendered pointer-interaction suite exercises Stop, destructive confirmation and Accept/Deny/Comment review controls in a rendered Unity window. Claude/Gemini protocol tests use localhost mocks; no live paid inference was performed.
 
 See [TESTING.md](TESTING.md).
 
@@ -160,9 +166,9 @@ Existing installations are migrated automatically:
 ## Known limitations
 
 - Image generation is not implemented. The Asset Manager imports and configures existing artwork.
-- Animation authoring is limited to inspecting controllers and assigning them; there is no keyframe/timeline editor.
-- The chat UI is UI Toolkit, while the Project/Changes/MCP/Settings/Logs tabs are still hosted through `IMGUIContainer`. The suite performs in-memory UI smoke tests and builds the full shell; it does not automate pixel layout or real mouse interaction.
-- Provider features and availability can change; the extension reports provider errors rather than hiding them.
+- Animation tools create transform/sprite keyframe clips and controllers with timed transitions. A visual timeline editor, rig/retargeting tools, blend trees and conditional controller transitions remain outside the current tool surface.
+- The chat UI is UI Toolkit, while the Project/Changes/MCP/Settings/Logs tabs are still hosted through `IMGUIContainer`. Automated coverage includes in-memory smoke tests, rendered chat layout and rendered pointer interactions. Pixel-perfect screenshot comparisons and native desktop mouse automation remain untested.
+- Provider features and availability can change. Inactivity deadlines, traffic/progress ages and one bounded timeout retry improve recovery; genuine upstream failures still surface as errors.
 - Historical information in old Git commits is not removed by editing files. See the repository privacy notes in the release summary.
 
 ## License

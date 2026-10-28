@@ -92,6 +92,8 @@ namespace UnityAIBridge
 
     public enum StreamEventKind
     {
+        TransportActivity,
+        ToolExecutionStarted,
         Status,
         TextDelta,
         ReasoningDelta,

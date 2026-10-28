@@ -68,6 +68,8 @@ Every write tool creates a pending change with a unified diff. **Nothing is writ
 | `slice_sprite` | `path`, `rows`, `columns` | Grid-slice a sprite sheet |
 | `assign_sprite` | `target`, `component` (`SpriteRenderer`/`Image`), `sprite` | Assign a Sprite |
 | `create_material` | `path`, `color` (`#RRGGBB`), `texture`, `shader` | Create a material with an available shader |
+| `create_animation_clip` | `path`, transform `curves` and/or `sprite_frames`, optional sample rate/loop | New keyframed .anim asset; source subassets and destination revalidated at apply time |
+| `create_animator_controller` | `path`, `states`, optional `default_state` / timed `transitions` | New controller referencing approved, existing clips |
 | `create_scriptable_object` | `path`, `scriptable_type`, `properties{}` | Create a `.asset` from an existing ScriptableObject type |
 | `save_scene` | — | Save the active scene (staged) |
 

@@ -139,7 +139,7 @@ namespace UnityAIBridge
                     usage.TotalTokens = u["totalTokenCount"].AsInt(usage.PromptTokens + usage.CompletionTokens);
                     usage.CachedTokens = u["cachedContentTokenCount"].AsInt();
                 }
-            }, token).ConfigureAwait(false);
+            }, token, null, () => onEvent(new StreamEvent { Kind = StreamEventKind.TransportActivity })).ConfigureAwait(false);
             if (finish != "STOP") throw new BridgeException("Gemini did not finish successfully: " + (finish ?? "stream ended without a finish reason") + ". Retry or adjust the output limit.");
             return new ProviderTurn { Text = text.ToString(), Reasoning = thinking.ToString(), ToolCalls = calls, Usage = usage, StopReason = finish, RawItemsJson = JsonValue.Obj("provider", "gemini", "parts", parts).ToJson(false) };
         }

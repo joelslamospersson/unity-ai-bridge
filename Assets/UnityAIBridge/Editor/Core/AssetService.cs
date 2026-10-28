@@ -528,6 +528,13 @@ namespace UnityAIBridge
                 result["properties"] = properties;
             }
 
+            var clip = main as AnimationClip;
+            if (clip != null)
+            {
+                result["kind"] = "animation_clip";
+                result["animation"] = AnimationService.DescribeClip(clip);
+            }
+
             var controller = main as AnimatorController;
             if (controller != null)
             {

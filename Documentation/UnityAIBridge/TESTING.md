@@ -1,5 +1,31 @@
 # Testing and results
 
+## Activity, animation and interaction validation (2.3.0)
+
+The isolated Unity 6000.6.7f1 suite passes **184 tests, 0 failures**. Added coverage verifies truthful activity phases, monotonic run timers, real transport heartbeats separated from model progress, quiet-provider notices, approval/Stop states, safe retry after heartbeats, animation approval boundaries, interpolation/loop/sample settings, sprite subasset references, controller states/transitions, invalid keys/paths/sources and destination collision protection at apply time.
+
+The rendered layout check exercises growing answers, tool output, long thinking summaries and compact approval/composer layout. The interaction harness runs a rendered Editor window and routes pointer clicks through production Stop and approval controls. Results are written to `Library/UnityAIBridge/chat-layout-result.json` and `interaction-result.json`. The remaining UI limitations are screenshot-diff comparisons and native desktop input automation.
+
+To reproduce in a **disposable** project containing the bridge and Unity UI:
+
+```bash
+python3 scripts/validate_unity_ui.py \
+  --unity /path/to/Unity \
+  --project /tmp/unity-ai-bridge-validation
+```
+
+The runner requires Python 3 and a working graphical display (an X11 desktop or Xvfb on Linux). The Unity harness picks visible controls in a rendered panel and dispatches pooled pointer events through their production handlers. It exercises Stop, destructive confirmation, Accept, Deny and Send comment; it does not submit provider prompts or modify gameplay assets. Never point it at a working game project: the harness uses disposable conversations and exits the Editor. Pass `--mode layout` or `--mode interaction` to select one check. Logs and JSON results remain under the disposable project's `Library/UnityAIBridge/`.
+
+## Provider stream timeout repair (2026-10-28)
+
+**165 passed, 0 failed** in an isolated Unity 6000.6.7f1 project. A ChatGPT request failed with `The provider stream timed out.` because its configured 180-second timer measured the whole HTTP request and was never renewed by incoming data. The Responses provider also waited for the HTTP connection to close after receiving a terminal event.
+
+Streaming now uses an inactivity deadline, renewed when fragments arrive (including comments/heartbeats and partial lines). Response headers have a separate deadline. Responses completion/failure events and chat-completion `[DONE]` markers end the read immediately. Error-body reads and Stop remain bounded. A typed timeout permits one retry of the current inference only before output begins; completed tool results remain in the transcript. Partial output, user cancellation and HTTP/provider errors do not enter this retry path.
+
+Thirteen added regressions exercise active SSE and NDJSON streams exceeding their timeout duration, fragmented CRLF/multiline data and Unicode, real stalls, stalled HTTP error bodies, header deadlines, Stop, terminal events on connections kept open by the server, bounded retry after committed tool results, no replay after partial text/reasoning/tool output, and cancellation during retry. These use local mock servers and the real Unity/Mono HTTP transport. No live generation or changes to gameplay assets were performed.
+
+Result file: `/tmp/unity-bridge-timeout/test-project/Library/UnityAIBridge/test-results.json`.
+
 ## Run the tests
 
 ### From the Editor
@@ -115,7 +141,7 @@ The upgrade moves the previous configuration and library directories without los
 - **Real ChatGPT OAuth consent**: requires an eligible OpenAI account and browser interaction. PKCE, URL construction, ID-token crypto, refresh and the ChatGPT Responses request shape are tested locally.
 - **Real DeepSeek/OpenAI/Ollama inference**: no credentials are included. Protocol handling is tested against local mock servers; live inference depends on your accounts.
 - **Applying a `.cs` change end-to-end**: this triggers a domain reload, which would interrupt the runner. File-level create/modify is tested; script application is verified manually.
-- **UI layout/interaction**: UI Toolkit shell and chat are smoke-tested in memory; pixel layout and real mouse/keyboard interaction are checked manually. Legacy tabs use IMGUI.
+- **UI layout/interaction**: coverage includes in-memory smoke tests, rendered streaming layout and simulated pointer interactions through production controls. Native desktop mouse/keyboard automation and screenshot comparisons remain manual. Legacy tabs use IMGUI.
 - **Live model availability**: depends on your accounts.
 
 ## Manual checklist
